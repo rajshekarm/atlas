@@ -1,0 +1,62 @@
+[
+  {
+    "id": "1",
+    "slug": "ai-assistant-vs-ai-agent",
+    "title": "AI Assistant vs AI Agent",
+    "description": "A simple way to understand reactive assistants and autonomous agents",
+    "content": "# AI Assistant vs AI Agent\n\nAs AI systems become part of everyday software, two terms appear again and again: AI Assistant and AI Agent. They sound similar, but they represent very different ways of designing intelligence inside a system.\n\nUnderstanding this distinction is important, especially if you are building or evaluating AI-powered products.\n\n## AI Assistant\n\nAn AI Assistant is fundamentally reactive.\n\nIt exists to respond to user input. The assistant waits, receives a prompt, produces an answer, and stops. It does not decide what to do next, and it does not act unless explicitly asked.\n\nMost chat-based AI tools today fall into this category. They are extremely capable at reasoning, explaining, and generating content, but they remain under direct human control at all times.\n\nIn simple terms, the human thinks and decides. The assistant helps.\n\n## AI Agent\n\nAn AI Agent is designed around a goal rather than a prompt.\n\nInstead of waiting for step-by-step instructions, an agent is given an objective and the freedom to determine how to achieve it. It can plan a sequence of actions, use tools, observe outcomes, and adjust its behavior over time.\n\nAn agent does not stop after a single response. It operates in a loop, continuously moving closer to its goal unless constrained by rules or boundaries.\n\nIn this model, the human sets direction. The agent executes.\n\n## Why the Difference Matters\n\nThe difference between assistants and agents is not just academic. It changes how systems behave in production.\n\nAssistants are predictable and easy to control. Agents are powerful but introduce new challenges around reliability, safety, and monitoring. Choosing between them is a system design decision, not just an AI capability choice.\n\nAs software moves toward automation and autonomy, more systems will shift from assistant-like behavior to agent-like behavior.\n\n## A Simple Way to Think About It\n\nIf the AI always waits for your next instruction, it is acting as an assistant.\n\nIf the AI decides what should happen next in order to reach a goal, it is acting as an agent.\n\n## Closing Thoughts\n\nAI Assistants help humans think better.\n\nAI Agents help systems act on their own.\n\nKnowing which one you are designing, using, or deploying is essential when building modern AI-driven systems.",
+    "external_url": null,
+    "status": "published",
+    "tags": ["ai", "agents", "system-design"],
+    "created_at": "2026-01-31T00:00:00Z",
+    "updated_at": "2026-01-31T00:00:00Z"
+  },
+  {
+    "id": "2",
+    "slug": "coding-agent",
+    "title": "What is a Coding Agent?",
+    "description": "What is a Coding Agent?",
+    "content": "A coding agent is not a single model. It is a system built around a model with tool access, an iterative execution loop, and mechanisms to retrieve relevant code.\n\nThey can search your repo, edit multiple files, run terminal commands, and iterate on errors until the build and tests pass.\n\nWe are currently living through this third wave.",
+    "external_url": null,
+    "status": "published",
+    "tags": ["ai", "agents", "coding"],
+    "created_at": "2026-01-31T00:00:00Z",
+    "updated_at": "2026-01-31T00:00:00Z"
+  },
+  {
+    "id": "3",
+    "slug": "hierarchical-permissions-tree",
+    "title": "Beyond RBAC: Building a Recursive Entitlement Engine for Buy-Side SaaS",
+    "description": "From Root to Leaf: How Hierarchical Permissions Streamline Trade Execution and Audits",
+    "content": null,
+    "external_url": "https://medium.com/@rashekarmudigonda/from-root-to-leaf-how-hierarchical-permissions-streamline-trade-execution-and-audits-a8fc2f69d6c0",
+    "status": "published",
+    "tags": ["system-design", "fintech", "rbac"],
+    "created_at": "2025-12-10T00:00:00Z",
+    "updated_at": "2025-12-10T00:00:00Z"
+  },
+  {
+    "id": "4",
+    "slug": "distributed-systems",
+    "title": "Distributed Systems",
+    "description": "Scalability, fault tolerance, and consistency",
+    "content": "## What is a Distributed System?\n\nA distributed system is a collection of independent computers that appears to its users as a single coherent system.\n\n### Core Concepts\n- CAP Theorem\n- Consensus\n- Replication\n- Fault Tolerance",
+    "external_url": null,
+    "status": "published",
+    "tags": ["distributed-systems"],
+    "created_at": "2026-01-31T00:00:00Z",
+    "updated_at": "2026-01-31T00:00:00Z"
+  },
+  {
+    "id": "5",
+    "slug": "system-design",
+    "title": "System Design Basics",
+    "description": "Foundations of designing scalable systems",
+    "content": "System design focuses on building systems that scale horizontally and handle failures gracefully.",
+    "external_url": null,
+    "status": "published",
+    "tags": ["system-design"],
+    "created_at": "2026-01-31T00:00:00Z",
+    "updated_at": "2026-01-31T00:00:00Z"
+  }
+]
