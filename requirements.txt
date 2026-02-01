@@ -9,11 +9,10 @@ python-multipart>=0.0.6
 
 # Azure Services
 azure-identity>=1.15.0
-azure-ai-openai>=1.0.0
 azure-search-documents>=11.4.0
 azure-storage-blob>=12.19.0
 
-# OpenAI (alternative/backup)
+# OpenAI (works with Azure OpenAI)
 openai>=1.10.0
 
 # Vector Database
