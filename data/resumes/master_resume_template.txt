@@ -1,0 +1,67 @@
+JOHN DOE
+Software Engineer
+john.doe@email.com | +1-555-0123 | San Francisco, CA
+LinkedIn: linkedin.com/in/johndoe | GitHub: github.com/johndoe
+
+PROFESSIONAL SUMMARY
+Experienced Software Engineer with 5+ years of expertise in building scalable backend systems and APIs. Proficient in Python, FastAPI, and modern cloud technologies. Passionate about clean code, system design, and solving complex technical challenges.
+
+PROFESSIONAL EXPERIENCE
+
+Senior Software Engineer | Tech Innovations Inc. | January 2022 - Present
+• Architected and implemented microservices-based backend system serving 1M+ daily users
+• Designed and deployed RESTful APIs using FastAPI, reducing response times by 40%
+• Led migration from monolithic architecture to containerized services using Docker and Kubernetes
+• Mentored team of 4 junior engineers on best practices and code quality
+• Implemented CI/CD pipelines using GitHub Actions, reducing deployment time by 60%
+
+Software Engineer | StartUp Solutions | June 2019 - December 2021
+• Developed core backend features for SaaS platform using Python and Django
+• Built real-time data processing pipeline handling 100K+ events per hour
+• Optimized database queries, improving application performance by 35%
+• Collaborated with frontend team to design and implement GraphQL APIs
+• Participated in on-call rotation for production support and incident response
+
+Junior Software Developer | Digital Agency Co. | August 2018 - May 2019
+• Contributed to development of client web applications using Python and Flask
+• Implemented authentication and authorization systems using OAuth 2.0
+• Wrote comprehensive unit and integration tests achieving 85% code coverage
+• Participated in code reviews and followed Agile/Scrum methodologies
+
+TECHNICAL SKILLS
+
+Languages: Python, JavaScript, TypeScript, SQL
+Frameworks: FastAPI, Django, Flask, Node.js, React
+Databases: PostgreSQL, MongoDB, Redis, MySQL
+Cloud & DevOps: AWS (EC2, S3, Lambda), Docker, Kubernetes, Terraform, GitHub Actions
+Tools & Technologies: Git, REST APIs, GraphQL, Microservices, CI/CD, Linux
+
+EDUCATION
+
+Bachelor of Science in Computer Science | State University | 2014 - 2018
+• GPA: 3.7/4.0
+• Relevant Coursework: Data Structures, Algorithms, Database Systems, Web Development
+• Dean's List: 2016, 2017, 2018
+
+PROJECTS
+
+Open Source Contributor | Various Projects | 2019 - Present
+• Active contributor to FastAPI ecosystem and Python open-source projects
+• Merged 20+ pull requests improving documentation and fixing bugs
+• Maintainer of personal open-source library with 500+ GitHub stars
+
+Personal Portfolio Website | portfolio.johndoe.com | 2023
+• Built full-stack web application using Next.js and FastAPI
+• Implemented blog with markdown support and syntax highlighting
+• Deployed using Vercel and AWS with automated CI/CD
+
+CERTIFICATIONS
+
+• AWS Certified Solutions Architect - Associate | 2022
+• Python Professional Certificate | 2020
+
+ADDITIONAL INFORMATION
+
+• Work Authorization: US Citizen
+• Languages: English (Native), Spanish (Professional Working Proficiency)
+• Volunteer: Technical Mentor at Code.org (2020 - Present)

@@ -3,17 +3,20 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.services.blogs.router import router as blogs_router
 from app.services.ai.router import router as ai_router
+from app.services.flash.router import router as flash_router
 
 app = FastAPI(
     title="Atlas",
-    version="1.0.0"
+    version="1.0.0",
+    description="Multi-service platform for blogs, AI experiments, and Flash AI Job Assistant"
 )
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:5173",  # React dev
-        "http://localhost:3000"   # (optional fallback)
+        "http://localhost:3000",  # (optional fallback)
+        "chrome-extension://*"    # Chrome extension
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -22,6 +25,7 @@ app.add_middleware(
 
 app.include_router(blogs_router, prefix="/api/blogs", tags=["blogs"])
 app.include_router(ai_router, prefix="/api/ai", tags=["ai"])
+app.include_router(flash_router, prefix="/api/flash", tags=["flash"])
 
 @app.get("/health")
 def health():
