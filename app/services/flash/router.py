@@ -30,11 +30,15 @@ from app.services.flash.services.job_analyzer import JobAnalyzerService
 from app.services.flash.services.resume_tailor import ResumeTailorService
 from app.services.flash.services.qa_engine import QuestionAnsweringService
 from app.services.flash.services.guardrails import GuardrailsService
+from app.services.flash.llm_client import get_llm_client
 
-# Initialize services
-job_analyzer = JobAnalyzerService()
-resume_tailor = ResumeTailorService()
-qa_engine = QuestionAnsweringService()
+# Initialize LLM client (provider-agnostic)
+llm_client = get_llm_client()
+
+# Initialize services with LLM client
+job_analyzer = JobAnalyzerService(llm_client=llm_client)
+resume_tailor = ResumeTailorService(llm_client=llm_client)
+qa_engine = QuestionAnsweringService(llm_client=llm_client)
 guardrails = GuardrailsService()
 
 router = APIRouter()
@@ -60,6 +64,7 @@ async def analyze_job(request: AnalyzeJobRequest):
     - Determines seniority level
     - Analyzes role focus
     """
+    print("Analysing job....")
     try:
         analysis = await job_analyzer.analyze_job(request.job_description)
         return analysis

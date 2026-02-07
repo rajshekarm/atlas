@@ -12,8 +12,12 @@ azure-identity>=1.15.0
 azure-search-documents>=11.4.0
 azure-storage-blob>=12.19.0
 
-# OpenAI (works with Azure OpenAI)
+# OpenAI (works with Azure OpenAI and standard OpenAI)
 openai>=1.10.0
+
+# Optional: Google Gemini (only needed if using Gemini)
+# Uncomment if using: FLASH_LLM_PROVIDER=gemini
+# google-generativeai>=0.3.0
 
 # Vector Database
 chromadb>=0.4.22
@@ -32,7 +36,7 @@ spacy>=3.7.2
 pandas>=2.1.0
 numpy>=1.26.0
 
-# HTTP Requests
+# HTTP Requests (needed for Ollama and testing)
 httpx>=0.26.0
 aiohttp>=3.9.0
 

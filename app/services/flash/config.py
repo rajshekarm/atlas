@@ -8,11 +8,27 @@ from typing import Optional
 class FlashSettings(BaseSettings):
     """Flash service configuration"""
     
+    # LLM Provider Selection
+    enable_llm: bool = True
+    llm_provider: str = "azure_openai"  # azure_openai, openai, gemini, ollama
+    
     # Azure OpenAI
     azure_openai_endpoint: Optional[str] = None
     azure_openai_api_key: Optional[str] = None
     azure_openai_deployment_name: str = "gpt-4"
     azure_openai_api_version: str = "2024-02-01"
+    
+    # OpenAI (Standard)
+    openai_api_key: Optional[str] = None
+    openai_model: str = "gpt-4-turbo-preview"
+    
+    # Google Gemini
+    gemini_api_key: Optional[str] = None
+    gemini_model: str = "gemini-pro"
+    
+    # Ollama (Local Models)
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_model: str = "llama2"
     
     # Azure AI Search
     azure_search_endpoint: Optional[str] = None

@@ -20,7 +20,7 @@ Not in a "fake your experience" kind of way, but genuinely helping to present ex
 
 I envisioned an AI assistant that could:
 - **Analyze job descriptions** and extract key requirements
-- **Tailor resumes** ethically (no fake experience, just better presentation)
+- **Tailor resumes** ethically (just better presentation)
 - **Answer application questions** using my real profile and experience
 - **Work with a Chrome Extension** to auto-fill forms in real browsers
 - **Keep me in control** - human approval before anything gets submitted

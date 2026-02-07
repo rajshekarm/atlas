@@ -108,7 +108,7 @@ class JobAnalyzerService:
             'git', 'jenkins', 'github actions', 'ci/cd'
         ]
         
-        found_tech = []
+        found_tech = ["python"]
         all_text_lower = all_text.lower()
         
         for tech in tech_keywords:
@@ -164,17 +164,19 @@ class JobAnalyzerService:
         """Call LLM (Azure OpenAI) for text generation"""
         if not self.llm_client:
             return ""
-            
-        # Placeholder for actual Azure OpenAI call
-        # response = await self.llm_client.chat.completions.create(
-        #     model="gpt-4",
-        #     messages=[{"role": "user", "content": prompt}],
-        #     temperature=0.3,
-        #     max_tokens=500
-        # )
-        # return response.choices[0].message.content
         
-        return ""
+        try:
+            # Use the unified interface - works with any provider
+            messages = [{"role": "user", "content": prompt}]
+            response = await self.llm_client.chat_completion(
+                messages=messages,
+                temperature=0.3,
+                max_tokens=500
+            )
+            return response
+        except Exception as e:
+            print(f"LLM call failed: {e}")
+            return ""
     
     def _extract_skills_fallback(self, text: str) -> List[str]:
         """Fallback skill extraction without LLM"""
