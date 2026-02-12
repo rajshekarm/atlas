@@ -262,22 +262,18 @@ class QuestionAnsweringService:
         Returns:
             (answer, confidence_score)
         """
-        
-        # If we have high-confidence direct data, use it
-        if retrieved_sources and retrieved_sources[0].relevance_score > 0.9:
-            return retrieved_sources[0].content, retrieved_sources[0].relevance_score
-        
-        # Otherwise, use LLM to synthesize answer
-        if self.llm_client and retrieved_sources:
+        # Use LLM whenever available.
+        if self.llm_client:
             prompt = self._build_qa_prompt(context, retrieved_sources, user_profile)
             answer = await self._call_llm(prompt)
-            
-            # Calculate confidence based on source quality
-            avg_relevance = sum(s.relevance_score for s in retrieved_sources) / len(retrieved_sources)
-            confidence_score = min(avg_relevance, 0.85)  # Cap at 0.85 for LLM-generated
-            
-            return answer, confidence_score
-        
+            if answer and answer.strip():
+                if retrieved_sources:
+                    avg_relevance = sum(s.relevance_score for s in retrieved_sources) / len(retrieved_sources)
+                    confidence_score = min(avg_relevance, 0.85)
+                else:
+                    confidence_score = 0.55
+                return answer.strip(), confidence_score
+
         # Fallback: Use profile data directly
         if retrieved_sources:
             return retrieved_sources[0].content, 0.6
@@ -291,36 +287,40 @@ class QuestionAnsweringService:
         user_profile: UserProfile
     ) -> str:
         """Build LLM prompt for answering question"""
-        
+
         prompt = f"""
-You are helping a user fill out a job application. Answer the following question truthfully and professionally based only on the provided context.
+TASK:
+You are filling a single job application field on behalf of the user.
+Generate the best answer for that field using the context below.
 
-QUESTION:
-{context.question}
-
-FIELD TYPE: {context.field_type}
+FIELD INPUT:
+- Question/Label: {context.question}
+- Field Type: {context.field_type}
+- Field ID: {context.field_id}
 
 AVAILABLE CONTEXT:
 """
-        
+
         for i, source in enumerate(sources, 1):
             prompt += f"\n{i}. From {source.source_type} (relevance: {source.relevance_score:.2f}):\n{source.content}\n"
-        
+
         prompt += f"""
 
 USER PROFILE:
 - Name: {user_profile.full_name}
 - Current Title: {user_profile.current_title}
 - Experience: {user_profile.years_of_experience} years
-- Skills: {', '.join(user_profile.skills[:10])}
+- Skills: {', '.join((user_profile.skills or [])[:10])}
 
 INSTRUCTIONS:
-1. Answer truthfully based only on the provided context
-2. Do not fabricate information
-3. Keep the answer concise and professional
-4. Match the tone expected for a job application
-5. If the question asks for specific data (email, phone), provide it directly
-6. If asking for an essay/explanation, provide 2-3 sentences
+1. Use only the provided context and profile information.
+2. Do not invent facts. If information is missing, return: "Not provided".
+3. Keep responses concise and professional for application forms.
+4. For simple fields (name, email, phone, location), return only the value.
+5. For yes/no style questions, return exactly "Yes" or "No" when confident.
+6. For long text prompts, return 2-4 clear sentences.
+7. Do not include explanations, prefixes, markdown, or bullet points.
+8. Output only the final field answer text.
 
 ANSWER:
 """
@@ -367,17 +367,25 @@ Provide 3 different professional answers, each on a new line.
         """Call LLM for text generation"""
         if not self.llm_client:
             return ""
-        
-        # Placeholder for Azure OpenAI call
-        # response = await self.llm_client.chat.completions.create(
-        #     model="gpt-4",
-        #     messages=[{"role": "user", "content": prompt}],
-        #     temperature=0.4,
-        #     max_tokens=300
-        # )
-        # return response.choices[0].message.content
-        
-        return ""
+
+        try:
+            messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a job application field completion assistant. "
+                        "Return only field-ready answer text. Be truthful, concise, and never fabricate."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ]
+            return await self.llm_client.chat_completion(
+                messages=messages,
+                temperature=0.3,
+                max_tokens=300
+            )
+        except Exception:
+            return ""
     
     async def store_approved_answer(
         self,
