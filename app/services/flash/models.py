@@ -2,7 +2,7 @@
 Pydantic models for Flash AI Job Application Assistant
 """
 from typing import Optional, List, Dict, Any, Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from datetime import datetime
 from enum import Enum
 
@@ -72,6 +72,29 @@ class FormField(BaseModel):
     required: bool = False
     options: Optional[List[str]] = None  # for dropdown/radio
     validation_rules: Optional[Dict[str, Any]] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_client_keys(cls, data: Any) -> Any:
+        """Accept browser payload keys: id/type/name."""
+        if not isinstance(data, dict):
+            return data
+
+        normalized = dict(data)
+
+        if "field_id" not in normalized and "id" in normalized:
+            normalized["field_id"] = normalized["id"]
+        if "field_type" not in normalized and "type" in normalized:
+            normalized["field_type"] = normalized["type"]
+        if "field_name" not in normalized:
+            normalized["field_name"] = (
+                normalized.get("name")
+                or normalized.get("field_id")
+                or normalized.get("id")
+                or "unknown_field"
+            )
+
+        return normalized
 
 
 class ApplicationForm(BaseModel):
@@ -323,7 +346,7 @@ class FillApplicationFormRequest(BaseModel):
     """Browser request for extracted form fields and optional user profile data."""
     form_fields: List[FormField]
     user_id: str
-    job_id: str
+    job_id: Optional[str] = None
     user_profile: Optional[Dict[str, Any]] = None
 
 

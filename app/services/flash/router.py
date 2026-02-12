@@ -601,11 +601,11 @@ async def fill_application_form(request: FillApplicationFormRequest):
                 question=question_text,
                 field_id=field.field_id,
                 field_type=field.field_type,
-                job_id=request.job_id,
+                job_id=request.job_id or "unknown_job",
                 resume_path=user_profile.master_resume_path or "./data/resumes/master_resume.txt",
                 user_profile=user_profile.dict()
             )
-           
+            print("finding answers")
             answer = await qa_engine.answer_question(context, user_profile)
             validation = guardrails.validate_answer(answer, user_profile.dict())
 
@@ -908,6 +908,7 @@ def _build_user_profile(user_id: str, overrides: Optional[Dict[str, Any]] = None
     """Return a lightweight profile used by the Flash service in the absence of storage."""
     # Check if profile exists in storage first
     if user_id in user_profiles_db:
+        print(f"user profile for userid : {user_id}")
         profile = user_profiles_db[user_id]
         if overrides:
             profile = profile.copy(update=overrides)
