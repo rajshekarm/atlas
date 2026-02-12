@@ -2,10 +2,27 @@
 Flash Service Router
 API endpoints for AI Job Application Assistant
 """
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends, status
 from typing import Any, Dict, List, Optional
 import logging
 
+from app.core.auth import get_current_user_id, get_optional_user_id
+from app.services.auth.models import (
+    RegisterRequest,
+    LoginRequest,
+    RefreshTokenRequest,
+    AuthResponse,
+    AuthData,
+    UserResponse,
+    RefreshTokenResponse,
+    RefreshToken
+)
+from app.services.auth.utils import (
+    hash_password,
+    verify_password,
+    create_access_token,
+    create_refresh_token
+)
 from app.services.flash.models import (
     # Request models
     AnalyzeJobRequest,
@@ -49,6 +66,12 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
+# ===== Authentication Storage =====
+# In-memory storage (replace with database in production)
+auth_users_db: Dict[str, dict] = {}  # email -> user data
+auth_refresh_tokens_db: Dict[str, RefreshToken] = {}  # token -> RefreshToken
+
+
 # ===== Health Check =====
 @router.get("/health")
 async def health_check():
@@ -56,9 +79,310 @@ async def health_check():
     return {"status": "ok", "service": "flash"}
 
 
+# ========================================
+# 🔐 AUTHENTICATION ENDPOINTS
+# ========================================
+
+@router.post("/auth/register", response_model=AuthResponse, tags=["Authentication"])
+async def register(request: RegisterRequest):
+    """
+    Register a new user
+    
+    This endpoint:
+    - Validates email is not already registered
+    - Hashes the password
+    - Creates user account
+    - Generates access and refresh tokens
+    - Returns user data and tokens
+    """
+    try:
+        # Check if user already exists
+        if request.email in auth_users_db:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email already registered"
+            )
+        
+        # Hash password
+        hashed_password = hash_password(request.password)
+        
+        # Generate user ID
+        import uuid
+        user_id = f"user_{uuid.uuid4().hex[:10]}"
+        
+        # Create user
+        from datetime import datetime
+        user_data = {
+            "id": user_id,
+            "name": request.name,
+            "email": request.email,
+            "password": hashed_password,
+            "created_at": datetime.utcnow().isoformat()
+        }
+        
+        # Store user
+        auth_users_db[request.email] = user_data
+        
+        # Generate tokens
+        access_token, access_expires = create_access_token(user_id, request.email)
+        refresh_token, refresh_expires = create_refresh_token(user_id)
+        
+        # Store refresh token
+        auth_refresh_tokens_db[refresh_token] = RefreshToken(
+            token=refresh_token,
+            user_id=user_id,
+            expires_at=refresh_expires
+        )
+        
+        # Create response
+        user_response = UserResponse(
+            id=user_id,
+            name=request.name,
+            email=request.email
+        )
+        
+        auth_data = AuthData(
+            user=user_response,
+            access_token=access_token,
+            refresh_token=refresh_token,
+            expires_at=access_expires.isoformat() + "Z"
+        )
+        
+        logger.info(f"User registered: {request.email}")
+        
+        return AuthResponse(success=True, data=auth_data)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Registration failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Registration failed: {str(e)}"
+        )
+
+
+@router.post("/auth/login", response_model=AuthResponse, tags=["Authentication"])
+async def login(request: LoginRequest):
+    """
+    Login an existing user
+    
+    This endpoint:
+    - Validates email and password
+    - Generates new access and refresh tokens
+    - Returns user data and tokens
+    """
+    try:
+        # Check if user exists
+        if request.email not in auth_users_db:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid email or password"
+            )
+        
+        user_data = auth_users_db[request.email]
+        
+        # Verify password
+        if not verify_password(request.password, user_data["password"]):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid email or password"
+            )
+        
+        # Generate tokens
+        access_token, access_expires = create_access_token(
+            user_data["id"], 
+            request.email
+        )
+        refresh_token, refresh_expires = create_refresh_token(user_data["id"])
+        
+        # Store refresh token
+        auth_refresh_tokens_db[refresh_token] = RefreshToken(
+            token=refresh_token,
+            user_id=user_data["id"],
+            expires_at=refresh_expires
+        )
+        
+        # Create response
+        user_response = UserResponse(
+            id=user_data["id"],
+            name=user_data["name"],
+            email=user_data["email"]
+        )
+        
+        auth_data = AuthData(
+            user=user_response,
+            access_token=access_token,
+            refresh_token=refresh_token,
+            expires_at=access_expires.isoformat() + "Z"
+        )
+        
+        logger.info(f"User logged in: {request.email}")
+        
+        return AuthResponse(success=True, data=auth_data)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Login failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Login failed: {str(e)}"
+        )
+
+
+@router.post("/auth/refresh", response_model=RefreshTokenResponse, tags=["Authentication"])
+async def refresh(request: RefreshTokenRequest):
+    """
+    Refresh access token using refresh token
+    
+    This endpoint:
+    - Validates refresh token
+    - Generates new access token
+    - Returns new access token and expiration
+    """
+    try:
+        from datetime import datetime
+        
+        # Check if refresh token exists
+        if request.refresh_token not in auth_refresh_tokens_db:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid refresh token"
+            )
+        
+        refresh_token_data = auth_refresh_tokens_db[request.refresh_token]
+        
+        # Check if refresh token is expired
+        if datetime.utcnow() > refresh_token_data.expires_at:
+            # Clean up expired token
+            del auth_refresh_tokens_db[request.refresh_token]
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Refresh token expired"
+            )
+        
+        # Get user data
+        user_id = refresh_token_data.user_id
+        user_email = None
+        
+        # Find user email
+        for email, user_data in auth_users_db.items():
+            if user_data["id"] == user_id:
+                user_email = email
+                break
+        
+        if not user_email:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User not found"
+            )
+        
+        # Generate new access token
+        access_token, access_expires = create_access_token(user_id, user_email)
+        
+        logger.info(f"Token refreshed for user: {user_id}")
+        
+        return RefreshTokenResponse(
+            access_token=access_token,
+            expires_at=access_expires.isoformat() + "Z"
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Token refresh failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Token refresh failed: {str(e)}"
+        )
+
+
+@router.post("/auth/logout", tags=["Authentication"])
+async def logout(request: RefreshTokenRequest):
+    """
+    Logout user by invalidating refresh token
+    
+    This endpoint:
+    - Invalidates the provided refresh token
+    - Returns success message
+    """
+    try:
+        # Remove refresh token if it exists
+        if request.refresh_token in auth_refresh_tokens_db:
+            del auth_refresh_tokens_db[request.refresh_token]
+            logger.info(f"User logged out")
+        
+        return {"success": True, "message": "Logged out successfully"}
+        
+    except Exception as e:
+        logger.error(f"Logout failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Logout failed: {str(e)}"
+        )
+
+
+@router.get("/auth/me", response_model=UserResponse, tags=["Authentication"])
+async def get_current_user_info(user_id: str = Depends(get_current_user_id)):
+    """
+    Get current user information from access token
+    
+    Requires: Authorization header with valid JWT token
+    Returns: User information
+    """
+    try:
+        # Find user in database
+        for email, user_data in auth_users_db.items():
+            if user_data["id"] == user_id:
+                return UserResponse(
+                    id=user_data["id"],
+                    name=user_data["name"],
+                    email=user_data["email"]
+                )
+        
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Get current user failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+# ========================================
+# 🎯 FLASH SERVICE ENDPOINTS
+# ========================================
+
+
+# ===== Protected Example Endpoint =====
+@router.get("/protected-test")
+async def protected_test(user_id: str = Depends(get_current_user_id)):
+    """
+    Example protected endpoint - requires valid JWT token
+    
+    This demonstrates how Flash service can verify authentication.
+    Send request with header: Authorization: Bearer <access_token>
+    """
+    return {
+        "message": "Authentication verified!",
+        "authenticated_user_id": user_id,
+        "service": "flash"
+    }
+
+
 # ===== Job Analysis Endpoints =====
 @router.post("/analyze-job", response_model=JobAnalysis)
-async def analyze_job(request: AnalyzeJobRequest):
+async def analyze_job(
+    request: AnalyzeJobRequest,
+    user_id: Optional[str] = Depends(get_optional_user_id)
+):
     """
     Analyze job description and extract key requirements
     
@@ -67,6 +391,8 @@ async def analyze_job(request: AnalyzeJobRequest):
     - Identifies technologies
     - Determines seniority level
     - Analyzes role focus
+    
+    Authentication: Optional (works without token, but can track if provided)
     """
     print("Analysing job....")
     try:
@@ -374,29 +700,31 @@ user_profiles_db: Dict[str, UserProfile] = {}
 
 
 @router.post("/user-profile", response_model=UserProfile)
-async def create_user_profile(request: CreateUserProfileRequest):
+async def create_user_profile(
+    request: CreateUserProfileRequest,
+    authenticated_user_id: str = Depends(get_current_user_id)
+):
     """
-    Create a new user profile
+    Create a new user profile (Protected - requires authentication)
     
     This endpoint:
-    - Creates a new user profile with provided information
-    - Generates a unique user_id
+    - Creates a new user profile for the authenticated user
+    - Uses authenticated user_id from JWT token
     - Stores profile data for use in form filling
     - Returns the created profile
     
-    Note: In production, password should be hashed before storage
+    Requires: Authorization header with valid JWT token
     """
     try:
-        import uuid
         from datetime import datetime
         
-        # Generate unique user ID
-        user_id = str(uuid.uuid4())
+        # Use authenticated user ID from token
+        user_id = authenticated_user_id
         
-        # Create user profile
+        # Create user profile using field names (not alias)
         profile = UserProfile(
             user_id=user_id,
-            full_name=request.full_name,
+            name=request.full_name,  # Use alias 'name' for construction
             email=request.email,
             password=request.password,  # TODO: Hash in production
             phone=request.phone,
@@ -407,6 +735,8 @@ async def create_user_profile(request: CreateUserProfileRequest):
             current_title=request.current_title,
             years_of_experience=request.years_of_experience,
             skills=request.skills or [],
+            education=request.education or [],
+            experience=request.experience or [],
             preferred_roles=request.preferred_roles or [],
             work_authorization=request.work_authorization,
             visa_status=request.visa_status,
@@ -429,13 +759,26 @@ async def create_user_profile(request: CreateUserProfileRequest):
 
 
 @router.get("/user-profile/{user_id}", response_model=UserProfile)
-async def get_user_profile(user_id: str):
+async def get_user_profile(
+    user_id: str,
+    authenticated_user_id: str = Depends(get_current_user_id)
+):
     """
-    Get user profile by ID
+    Get user profile by ID (Protected - requires authentication)
     
+    Users can only view their own profile
     Returns user profile information that can be used for form filling
+    
+    Requires: Authorization header with valid JWT token
     """
     try:
+        # Verify user is accessing their own profile
+        if user_id != authenticated_user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only access your own profile"
+            )
+        
         # Check if profile exists in storage
         if user_id in user_profiles_db:
             return user_profiles_db[user_id]
@@ -450,17 +793,31 @@ async def get_user_profile(user_id: str):
 
 
 @router.put("/user-profile/{user_id}", response_model=UserProfile)
-async def update_user_profile(user_id: str, request: UpdateUserProfileRequest):
+async def update_user_profile(
+    user_id: str,
+    request: UpdateUserProfileRequest,
+    authenticated_user_id: str = Depends(get_current_user_id)
+):
     """
-    Update existing user profile
+    Update existing user profile (Protected - requires authentication)
     
     This endpoint:
     - Updates user profile with new information
     - Only updates fields that are provided (partial updates)
+    - Users can only update their own profile
     - Returns the updated profile
+    
+    Requires: Authorization header with valid JWT token
     """
     try:
         from datetime import datetime
+        
+        # Verify user is updating their own profile
+        if user_id != authenticated_user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only update your own profile"
+            )
         
         # Check if profile exists
         if user_id not in user_profiles_db:
@@ -469,8 +826,8 @@ async def update_user_profile(user_id: str, request: UpdateUserProfileRequest):
         # Get existing profile
         profile = user_profiles_db[user_id]
         
-        # Update only provided fields
-        update_data = request.dict(exclude_unset=True)
+        # Update only provided fields (use model_dump for Pydantic v2)
+        update_data = request.model_dump(exclude_unset=True, by_alias=False)
         
         for field, value in update_data.items():
             if value is not None:
@@ -493,13 +850,26 @@ async def update_user_profile(user_id: str, request: UpdateUserProfileRequest):
 
 
 @router.delete("/user-profile/{user_id}")
-async def delete_user_profile(user_id: str):
+async def delete_user_profile(
+    user_id: str,
+    authenticated_user_id: str = Depends(get_current_user_id)
+):
     """
-    Delete user profile
+    Delete user profile (Protected - requires authentication)
     
+    Users can only delete their own profile
     Removes user profile from storage
+    
+    Requires: Authorization header with valid JWT token
     """
     try:
+        # Verify user is deleting their own profile
+        if user_id != authenticated_user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only delete your own profile"
+            )
+        
         if user_id not in user_profiles_db:
             raise HTTPException(status_code=404, detail=f"User profile not found: {user_id}")
         
@@ -546,7 +916,7 @@ def _build_user_profile(user_id: str, overrides: Optional[Dict[str, Any]] = None
     # Fallback to placeholder profile
     profile = UserProfile(
         user_id=user_id,
-        full_name="John Doe",
+        name="John Doe",  # Use alias 'name'
         email="john@example.com",
         phone="+1-555-0123",
         location="San Francisco, CA",

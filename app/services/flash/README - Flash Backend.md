@@ -1,9 +1,12 @@
 # Flash - AI Job Application Assistant 🤖
 
 ## Overview
+**All-in-one service** combining AI-powered job application assistance with user authentication.
+
 AI-powered assistant that helps users tailor resumes and automatically fill job applications using a Chrome Extension + FastAPI backend.
 
 ## Key Features
+✅ **Built-in Authentication** - JWT-based auth, no separate service needed  
 ✅ Resume tailoring based on Job Description (safe & ethical)  
 ✅ RAG-based question answering for application forms  
 ✅ Chrome Extension for real-browser automation  
@@ -13,11 +16,19 @@ AI-powered assistant that helps users tailor resumes and automatically fill job 
 ## Architecture
 
 ```
-Chrome Extension → FastAPI Backend → LLM + Vector DB
+Chrome Extension → Flash Service (All-in-One)
+                      ├── Authentication
+                      ├── Job Analysis
+                      ├── Resume Tailoring
+                      ├── Form Filling
+                      └── User Profiles
+                           ↓
+                   LLM + Vector DB
 ```
 
 ### Tech Stack
 - **Backend**: FastAPI (Python)
+- **Authentication**: JWT + bcrypt
 - **AI**: Azure OpenAI
 - **Vector DB**: Azure AI Search / Chroma
 - **Storage**: Azure Blob Storage / Local
@@ -42,25 +53,35 @@ flash/
 
 ## API Endpoints
 
-### Job Analysis
+### 🔐 Authentication (No separate service needed!)
+- `POST /api/flash/auth/register` - Register new user
+- `POST /api/flash/auth/login` - Login user
+- `POST /api/flash/auth/refresh` - Refresh access token
+- `POST /api/flash/auth/logout` - Logout user
+- `GET /api/flash/auth/me` - Get current user info (requires auth)
+
+### 📊 Job Analysis
 - `POST /api/flash/analyze-job` - Analyze job description
 
-### Resume Tailoring
+### 📄 Resume Tailoring
 - `POST /api/flash/tailor-resume` - Tailor resume for job
 
-### Question Answering
+### ❓ Question Answering
 - `POST /api/flash/answer-question` - Answer single question
 - `POST /api/flash/fill-application` - Fill entire application
+- `POST /api/flash/fill-application-form` - Fill form fields with optional user profile
 
-### Submission
+### ✅ Submission
 - `POST /api/flash/approve-application` - Approve & submit
 
-### User Management
+### 👤 User Profile Management (Protected - requires auth)
 - `POST /api/flash/user-profile` - Create new user profile
 - `GET /api/flash/user-profile/{user_id}` - Get user profile by ID
 - `PUT /api/flash/user-profile/{user_id}` - Update user profile
 - `DELETE /api/flash/user-profile/{user_id}` - Delete user profile
 - `GET /api/flash/user-profiles` - List all user profiles
+
+### 📋 Application History
 - `GET /api/flash/applications/{user_id}` - Application history
 
 ## Core Modules
@@ -163,28 +184,80 @@ AZURE_STORAGE_CONTAINER_NAME=resumes
 pip install -r requirements.txt
 ```
 
-### 3. Run Server
+### 3. Run Server (Single Service!)
 ```bash
 uvicorn app.main:app --reload --port 8000
 ```
 
+**That's it!** One command starts everything:
+- ✅ Authentication service
+- ✅ Flash AI service  
+- ✅ User profile management
+- ✅ All features ready to use
+
 ### 4. Test Endpoints
 ```bash
+# Test health
 curl http://localhost:8000/api/flash/health
+
+# Test auth
+curl -X POST http://localhost:8000/api/flash/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Test User","email":"test@example.com","password":"test123456"}'
 ```
 
 ## Usage Example
 
-### Create User Profile
+### 1. Register & Login (All in Flash!)
 ```python
 import httpx
+
+# Register new user
+response = httpx.post("http://localhost:8000/api/flash/auth/register", json={
+    "name": "Jane Smith",
+    "email": "jane@example.com",
+    "password": "SecurePass123!"
+})
+
+data = response.json()
+access_token = data["data"]["access_token"]
+refresh_token = data["data"]["refresh_token"]
+user_id = data["data"]["user"]["id"]
+
+print(f"✅ Registered! User ID: {user_id}")
+print(f"🔑 Access Token: {access_token[:20]}...")
+```
+
+### 2. Create User Profile (Protected)
+```python
+# Use the access token from registration
+headers = {"Authorization": f"Bearer {access_token}"}
 
 profile_data = {
     "full_name": "Jane Smith",
     "email": "jane@example.com",
-    "password": "secure_password",  # Will be hashed in production
     "phone": "+1-555-0199",
     "location": "New York, NY",
+    "current_title": "Senior Software Engineer",
+    "years_of_experience": 7,
+    "skills": ["Python", "FastAPI", "React", "PostgreSQL"],
+    "preferred_roles": ["Backend Engineer", "Full Stack Engineer"],
+    "work_authorization": "US Citizen",
+    "visa_status": "N/A",
+    "notice_period": "2 weeks",
+    "salary_expectation": "$150k - $180k"
+}
+
+response = httpx.post(
+    "http://localhost:8000/api/flash/user-profile",
+    json=profile_data,
+    headers=headers  # ← Use authenticated headers
+)
+user_profile = response.json()
+print(f"✅ Profile created for user {user_id}")
+```
+
+### 3. Update User Profile
     "current_title": "Senior Software Engineer",
     "years_of_experience": 7,
     "skills": ["Python", "FastAPI", "React", "PostgreSQL"],

@@ -199,7 +199,7 @@ class ValidationResult(BaseModel):
 class UserProfile(BaseModel):
     """User profile with structured data"""
     user_id: str
-    full_name: str
+    full_name: str = Field(alias="name")  # Accept both 'name' and 'full_name'
     email: str
     password: Optional[str] = None  # In production, this should be hashed
     phone: Optional[str] = None
@@ -210,6 +210,8 @@ class UserProfile(BaseModel):
     current_title: Optional[str] = None
     years_of_experience: Optional[int] = None
     skills: Optional[List[str]] = None
+    education: Optional[List[Dict[str, Any]]] = None
+    experience: Optional[List[Dict[str, Any]]] = None
     preferred_roles: Optional[List[str]] = None
     work_authorization: Optional[str] = None
     master_resume_path: Optional[str] = None
@@ -218,11 +220,15 @@ class UserProfile(BaseModel):
     salary_expectation: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: datetime = Field(default_factory=datetime.now)
+    
+    class Config:
+        populate_by_name = True  # Allow both alias and field name
+        by_alias = True  # Serialize using alias (return 'name' to frontend)
 
 
 class CreateUserProfileRequest(BaseModel):
     """Request to create a new user profile"""
-    full_name: str
+    full_name: str = Field(alias="name")  # Accept both 'name' and 'full_name'
     email: str
     password: Optional[str] = None
     phone: Optional[str] = None
@@ -233,16 +239,21 @@ class CreateUserProfileRequest(BaseModel):
     current_title: Optional[str] = None
     years_of_experience: Optional[int] = None
     skills: Optional[List[str]] = None
+    education: Optional[List[Dict[str, Any]]] = None
+    experience: Optional[List[Dict[str, Any]]] = None
     preferred_roles: Optional[List[str]] = None
     work_authorization: Optional[str] = None
     visa_status: Optional[str] = None
     notice_period: Optional[str] = None
     salary_expectation: Optional[str] = None
+    
+    class Config:
+        populate_by_name = True  # Allow both alias and field name
 
 
 class UpdateUserProfileRequest(BaseModel):
     """Request to update user profile - all fields optional"""
-    full_name: Optional[str] = None
+    full_name: Optional[str] = Field(None, alias="name")  # Accept both 'name' and 'full_name'
     email: Optional[str] = None
     password: Optional[str] = None
     phone: Optional[str] = None
@@ -253,11 +264,16 @@ class UpdateUserProfileRequest(BaseModel):
     current_title: Optional[str] = None
     years_of_experience: Optional[int] = None
     skills: Optional[List[str]] = None
+    education: Optional[List[Dict[str, Any]]] = None
+    experience: Optional[List[Dict[str, Any]]] = None
     preferred_roles: Optional[List[str]] = None
     work_authorization: Optional[str] = None
     visa_status: Optional[str] = None
     notice_period: Optional[str] = None
     salary_expectation: Optional[str] = None
+    
+    class Config:
+        populate_by_name = True  # Allow both alias and field name
     master_resume_path: Optional[str] = None
 
 

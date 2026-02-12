@@ -1,0 +1,38 @@
+### 1. Register a new user (Run this first to get a fresh token)
+POST http://127.0.0.1:8000/api/flash/auth/register
+Content-Type: application/json
+
+{
+  "email": "test@example.com",
+  "password": "Test123!@#",
+  "full_name": "Test User"
+}
+
+### 2. Or Login with existing user (USE THIS - Run to get NEW token!)
+POST http://127.0.0.1:8000/api/flash/auth/login
+Content-Type: application/json
+
+{
+  "email": "rashekarmudigonda@gmail.com",
+  "password": "Shiva@14j97"
+}
+
+### 3. Get current user info (Replace TOKEN below with access_token from login response above)
+GET http://127.0.0.1:8000/api/flash/auth/me
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoidXNlcl8yM2IyYWUzMjk4IiwiZW1haWwiOiJyYXNoZWthcm11ZGlnb25kYUBnbWFpbC5jb20iLCJleHAiOjE3NzA5NDE4MDIsImlhdCI6MTc3MDkzODIwMiwidHlwZSI6ImFjY2VzcyJ9.aVVHi1oAHlg3mPostMfDSTQV0yIUN6E-V1otxEMgX3Y
+
+### 4. Create user profile (Protected endpoint - requires token)
+POST http://127.0.0.1:8000/api/flash/user-profile
+Content-Type: application/json
+Authorization: Bearer TOKEN
+
+{
+  "email": "test@example.com",
+  "phone": "+1234567890",
+  "full_name": "Test User",
+  "linkedin_url": "https://linkedin.com/in/testuser"
+}
+
+### 5. Get user profile (Protected endpoint - requires token)
+GET http://127.0.0.1:8000/api/flash/user-profile
+Authorization: Bearer TOKEN
