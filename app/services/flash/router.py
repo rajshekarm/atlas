@@ -38,6 +38,8 @@ from app.services.flash.models import (
     JobAnalysis,
     ResumeTailoringResponse,
     QuestionAnswer,
+    AnswerSource,
+    ConfidenceLevel,
     ApplicationReview,
     SubmissionResult,
     ErrorResponse,
@@ -594,7 +596,72 @@ async def fill_application_form(request: FillApplicationFormRequest):
         warnings: List[str] = []
         confidence_accumulator = 0.0
 
+        def _norm(*values: Optional[str]) -> str:
+            return " ".join([(v or "").strip().lower() for v in values]).strip()
+
+        auth_keywords = (
+            "sign in",
+            "signin",
+            "login",
+            "log in",
+            "sign up",
+            "signup",
+            "register",
+            "create account",
+            "account",
+        )
+
+        page_text = " ".join(
+            _norm(field.label, field.field_name, field.placeholder)
+            for field in request.form_fields
+        )
+        has_password_field = any(
+            "password" in _norm(field.label, field.field_name, field.placeholder)
+            for field in request.form_fields
+        )
+        is_auth_page = has_password_field and any(keyword in page_text for keyword in auth_keywords)
+
         for field in request.form_fields:
+            if is_auth_page:
+                field_text = _norm(field.label, field.field_name, field.placeholder)
+                answer_text = ""
+
+                if "password" in field_text:
+                    answer_text = user_profile.password or ""
+                elif "email" in field_text or "username" in field_text:
+                    answer_text = user_profile.email or ""
+                elif "full name" in field_text or field_text == "name":
+                    answer_text = user_profile.full_name or ""
+                elif "first name" in field_text:
+                    answer_text = (user_profile.full_name or "").split(" ")[0] if user_profile.full_name else ""
+                elif "last name" in field_text:
+                    if user_profile.full_name and " " in user_profile.full_name:
+                        answer_text = user_profile.full_name.split(" ", 1)[1]
+                elif "phone" in field_text:
+                    answer_text = user_profile.phone or ""
+
+                if not answer_text and field.required:
+                    warnings.append(f"Missing value for auth field: {field.field_name or field.field_id}")
+
+                direct_answer = QuestionAnswer(
+                    field_id=field.field_id,
+                    question=field.label or field.field_name or field.field_id,
+                    answer=answer_text,
+                    confidence=ConfidenceLevel.HIGH if answer_text else ConfidenceLevel.LOW,
+                    confidence_score=1.0 if answer_text else 0.2,
+                    sources=[
+                        AnswerSource(
+                            source_type="profile",
+                            content="user_profile",
+                            relevance_score=1.0 if answer_text else 0.2
+                        )
+                    ],
+                    requires_review=False if answer_text else True
+                )
+                answers.append(direct_answer)
+                confidence_accumulator += direct_answer.confidence_score
+                continue
+
             question_text = field.label or field.field_name or field.field_id
             from app.services.flash.models import QuestionContext
             context = QuestionContext(
@@ -607,14 +674,6 @@ async def fill_application_form(request: FillApplicationFormRequest):
             )
             print("finding answers")
             answer = await qa_engine.answer_question(context, user_profile)
-            validation = guardrails.validate_answer(answer, user_profile.dict())
-
-            if not validation.can_proceed:
-                failed_checks = [c.check_name for c in validation.checks if not c.passed]
-                warnings.append(
-                    f"Field {field.field_name or field.field_id} flagged: {', '.join(failed_checks) or 'guardrail failed'}"
-                )
-
             answers.append(answer)
             confidence_accumulator += answer.confidence_score
 
@@ -746,6 +805,15 @@ async def create_user_profile(
             created_at=datetime.now(),
             updated_at=datetime.now()
         )
+
+        # Apply all explicitly provided optional fields so profile expansion
+        # does not require manual mapping changes in this endpoint.
+        create_data = request.model_dump(exclude_unset=True, by_alias=False)
+        for field, value in create_data.items():
+            if field == "full_name":
+                profile.full_name = value
+            elif hasattr(profile, field):
+                setattr(profile, field, value)
         
         # Store in database (currently in-memory)
         user_profiles_db[user_id] = profile
