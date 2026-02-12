@@ -10,7 +10,7 @@ class FlashSettings(BaseSettings):
     
     # LLM Provider Selection
     enable_llm: bool = True
-    llm_provider: str = "azure_openai"  # azure_openai, openai, gemini, ollama
+    llm_provider: str = "openai"  # azure_openai, openai, gemini, ollama
     
     # Azure OpenAI
     azure_openai_endpoint: Optional[str] = None
@@ -20,15 +20,15 @@ class FlashSettings(BaseSettings):
     
     # OpenAI (Standard)
     openai_api_key: Optional[str] = None
-    openai_model: str = "gpt-4-turbo-preview"
+    openai_model: str = "gpt-4o"  # or "gpt-4o-mini" for cheaper, "gpt-4" for stability
     
     # Google Gemini
     gemini_api_key: Optional[str] = None
-    gemini_model: str = "gemini-pro"
+    gemini_model: str = "gemini-1.5-pro"  # or "gemini-1.5-flash" for faster/cheaper
     
     # Ollama (Local Models)
     ollama_base_url: str = "http://localhost:11434"
-    ollama_model: str = "llama2"
+    ollama_model: str = "llama3.2"  # or "mistral", "codellama", "llama2" (older)
     
     # Azure AI Search
     azure_search_endpoint: Optional[str] = None

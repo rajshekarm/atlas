@@ -56,8 +56,11 @@ flash/
 - `POST /api/flash/approve-application` - Approve & submit
 
 ### User Management
-- `GET /api/flash/profile/{user_id}` - Get user profile
-- `POST /api/flash/profile` - Create/update profile
+- `POST /api/flash/user-profile` - Create new user profile
+- `GET /api/flash/user-profile/{user_id}` - Get user profile by ID
+- `PUT /api/flash/user-profile/{user_id}` - Update user profile
+- `DELETE /api/flash/user-profile/{user_id}` - Delete user profile
+- `GET /api/flash/user-profiles` - List all user profiles
 - `GET /api/flash/applications/{user_id}` - Application history
 
 ## Core Modules
@@ -172,7 +175,94 @@ curl http://localhost:8000/api/flash/health
 
 ## Usage Example
 
+### Create User Profile
+```python
+import httpx
+
+profile_data = {
+    "full_name": "Jane Smith",
+    "email": "jane@example.com",
+    "password": "secure_password",  # Will be hashed in production
+    "phone": "+1-555-0199",
+    "location": "New York, NY",
+    "current_title": "Senior Software Engineer",
+    "years_of_experience": 7,
+    "skills": ["Python", "FastAPI", "React", "PostgreSQL"],
+    "preferred_roles": ["Backend Engineer", "Full Stack Engineer"],
+    "work_authorization": "US Citizen",
+    "visa_status": "N/A",
+    "notice_period": "2 weeks",
+    "salary_expectation": "$150k - $180k"
+}
+
+response = httpx.post("http://localhost:8000/api/flash/user-profile", json=profile_data)
+user_profile = response.json()
+user_id = user_profile["user_id"]
+```
+
+### Update User Profile
+```python
+update_data = {
+    "location": "Boston, MA",
+    "salary_expectation": "$160k - $190k",
+    "skills": ["Python", "FastAPI", "React", "PostgreSQL", "Docker"]
+}
+
+response = httpx.put(f"http://localhost:8000/api/flash/user-profile/{user_id}", json=update_data)
+updated_profile = response.json()
+```
+
 ### Analyze Job
+```python
+import httpx
+
+job_data = {
+    "job_description": {
+        "title": "Senior Backend Engineer",
+        "company": "Tech Corp",
+        "description": "We're looking for...",
+        "requirements": ["5+ years Python", "FastAPI", "PostgreSQL"],
+        "url": "https://example.com/job"
+    }
+}
+
+response = httpx.post("http://localhost:8000/api/flash/analyze-job", json=job_data)
+analysis = response.json()
+```
+
+### Fill Application Form
+```python
+fill_data = {
+    "form_fields": [
+        {
+            "field_id": "email",
+            "field_name": "email",
+            "field_type": "email",
+            "label": "Email Address",
+            "required": True
+        },
+        {
+            "field_id": "experience",
+            "field_name": "experience",
+            "field_type": "textarea",
+            "label": "Tell us about your experience",
+            "required": True
+        }
+    ],
+    "user_id": user_id,
+    "job_id": "job123",
+    "user_profile": {
+        "email": "jane@example.com",
+        "years_of_experience": 7,
+        "current_title": "Senior Software Engineer"
+    }
+}
+
+response = httpx.post("http://localhost:8000/api/flash/fill-application-form", json=fill_data)
+answers = response.json()
+```
+
+### Answer Question
 ```python
 import httpx
 

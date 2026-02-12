@@ -73,12 +73,12 @@ async def main():
     
     providers_to_test = []
     
-    # Check which providers are configured
-    if settings.azure_openai_endpoint and settings.azure_openai_api_key:
-        providers_to_test.append('azure_openai')
+    # # Check which providers are configured
+    # if settings.azure_openai_endpoint and settings.azure_openai_api_key:
+    #     providers_to_test.append('azure_openai')
     
-    if settings.openai_api_key:
-        providers_to_test.append('openai')
+    # if settings.openai_api_key:
+    #     providers_to_test.append('openai')
     
     if settings.gemini_api_key:
         providers_to_test.append('gemini')

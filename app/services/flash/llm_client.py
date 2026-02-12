@@ -115,7 +115,8 @@ class OpenAIClient(BaseLLMClient):
         max_tokens: int = 500,
         **kwargs
     ) -> str:
-        try:# Type cast for OpenAI API - messages are compatible
+        try:
+            # Type cast for OpenAI API - messages are compatible
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,  # type: ignore
@@ -124,7 +125,6 @@ class OpenAIClient(BaseLLMClient):
                 **kwargs
             )
             return response.choices[0].message.content or ""
-            return response.choices[0].message.content
         except Exception as e:
             logger.error(f"OpenAI API call failed: {e}")
             raise
@@ -137,8 +137,8 @@ class GeminiClient(BaseLLMClient):
     """Google Gemini implementation"""
     
     def __init__(self):
-        try:  # type: ignore
-            import google.generativeai as genai
+        try:
+            import google.generativeai as genai  # type: ignore
         except ImportError:
             raise ImportError("Install google-generativeai: pip install google-generativeai")
         

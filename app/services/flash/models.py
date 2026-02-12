@@ -201,19 +201,64 @@ class UserProfile(BaseModel):
     user_id: str
     full_name: str
     email: str
+    password: Optional[str] = None  # In production, this should be hashed
     phone: Optional[str] = None
-    location: str
+    location: Optional[str] = None
     linkedin_url: Optional[str] = None
     github_url: Optional[str] = None
     portfolio_url: Optional[str] = None
-    current_title: str
-    years_of_experience: int
-    skills: List[str]
-    preferred_roles: List[str]
-    work_authorization: str
-    master_resume_path: str
+    current_title: Optional[str] = None
+    years_of_experience: Optional[int] = None
+    skills: Optional[List[str]] = None
+    preferred_roles: Optional[List[str]] = None
+    work_authorization: Optional[str] = None
+    master_resume_path: Optional[str] = None
+    visa_status: Optional[str] = None
+    notice_period: Optional[str] = None
+    salary_expectation: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: datetime = Field(default_factory=datetime.now)
+
+
+class CreateUserProfileRequest(BaseModel):
+    """Request to create a new user profile"""
+    full_name: str
+    email: str
+    password: Optional[str] = None
+    phone: Optional[str] = None
+    location: Optional[str] = None
+    linkedin_url: Optional[str] = None
+    github_url: Optional[str] = None
+    portfolio_url: Optional[str] = None
+    current_title: Optional[str] = None
+    years_of_experience: Optional[int] = None
+    skills: Optional[List[str]] = None
+    preferred_roles: Optional[List[str]] = None
+    work_authorization: Optional[str] = None
+    visa_status: Optional[str] = None
+    notice_period: Optional[str] = None
+    salary_expectation: Optional[str] = None
+
+
+class UpdateUserProfileRequest(BaseModel):
+    """Request to update user profile - all fields optional"""
+    full_name: Optional[str] = None
+    email: Optional[str] = None
+    password: Optional[str] = None
+    phone: Optional[str] = None
+    location: Optional[str] = None
+    linkedin_url: Optional[str] = None
+    github_url: Optional[str] = None
+    portfolio_url: Optional[str] = None
+    current_title: Optional[str] = None
+    years_of_experience: Optional[int] = None
+    skills: Optional[List[str]] = None
+    preferred_roles: Optional[List[str]] = None
+    work_authorization: Optional[str] = None
+    visa_status: Optional[str] = None
+    notice_period: Optional[str] = None
+    salary_expectation: Optional[str] = None
+    master_resume_path: Optional[str] = None
 
 
 # ===== Logging & Analytics Models =====
@@ -256,6 +301,21 @@ class FillApplicationRequest(BaseModel):
     job_description: JobDescription
     user_id: str
     auto_submit: bool = False
+
+
+class FillApplicationFormRequest(BaseModel):
+    """Browser request for extracted form fields and optional user profile data."""
+    form_fields: List[FormField]
+    user_id: str
+    job_id: str
+    user_profile: Optional[Dict[str, Any]] = None
+
+
+class FillApplicationFormResponse(BaseModel):
+    """Answer bundle returned to the client"""
+    answers: List[QuestionAnswer]
+    overall_confidence: float
+    warnings: Optional[List[str]] = None
 
 
 class ApproveApplicationRequest(BaseModel):
