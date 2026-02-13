@@ -333,6 +333,17 @@ class CreateUserProfileRequest(BaseModel):
     class Config:
         populate_by_name = True  # Allow both alias and field name
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_password_key(cls, data: Any) -> Any:
+        """Accept common typo key from clients: passoword -> password."""
+        if not isinstance(data, dict):
+            return data
+        normalized = dict(data)
+        if "password" not in normalized and "passoword" in normalized:
+            normalized["password"] = normalized["passoword"]
+        return normalized
+
 
 class UpdateUserProfileRequest(BaseModel):
     """Request to update user profile - all fields optional"""
@@ -388,6 +399,17 @@ class UpdateUserProfileRequest(BaseModel):
     class Config:
         populate_by_name = True  # Allow both alias and field name
     master_resume_path: Optional[str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_password_key(cls, data: Any) -> Any:
+        """Accept common typo key from clients: passoword -> password."""
+        if not isinstance(data, dict):
+            return data
+        normalized = dict(data)
+        if "password" not in normalized and "passoword" in normalized:
+            normalized["password"] = normalized["passoword"]
+        return normalized
 
 
 # ===== Logging & Analytics Models =====

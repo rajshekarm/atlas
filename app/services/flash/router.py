@@ -119,6 +119,9 @@ async def register(request: RegisterRequest):
             "name": request.name,
             "email": request.email,
             "password": hashed_password,
+            # Dev-only convenience for auto-fill flows that require credential replay.
+            # Replace with encrypted credential vault before production.
+            "latest_login_password": request.password,
             "created_at": datetime.utcnow().isoformat()
         }
         
@@ -190,6 +193,10 @@ async def login(request: LoginRequest):
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid email or password"
             )
+
+        # Keep latest successful plaintext credential in memory for auth-form replay.
+        # Replace with encrypted credential vault before production.
+        user_data["latest_login_password"] = request.password
         
         # Generate tokens
         access_token, access_expires = create_access_token(
@@ -596,7 +603,14 @@ async def fill_application_form(request: FillApplicationFormRequest):
             request.job_id or "unknown_job",
             len(request.form_fields),
         )
-        user_profile = _build_user_profile(request.user_id)
+        profile_overrides = dict(request.user_profile or {})
+        if "password" not in profile_overrides and "passoword" in profile_overrides:
+            profile_overrides["password"] = profile_overrides["passoword"]
+        user_profile = _build_user_profile(
+            request.user_id,
+            overrides=profile_overrides or None
+        )
+        auth_password = _get_auth_password(request.user_id) or ""
         answers: List[QuestionAnswer] = []
         warnings: List[str] = []
         confidence_accumulator = 0.0
@@ -646,7 +660,7 @@ async def fill_application_form(request: FillApplicationFormRequest):
             # Always handle password fields deterministically from profile.
             # This prevents password fields from reaching QA and returning "Not provided".
             if "password" in field_text:
-                password_answer = user_profile.password or ""
+                password_answer = auth_password or user_profile.password or ""
                 if not password_answer and field.required:
                     warnings.append(f"Missing value for auth field: {field.field_name or field.field_id}")
 
@@ -1078,3 +1092,11 @@ async def log_application(application_id: str, user_id: str):
     logger.info(f"Logging application {application_id} for user {user_id}")
     # Store in database
     # Update knowledge base with approved answers
+
+
+def _get_auth_password(user_id: str) -> Optional[str]:
+    """Get latest known plaintext password for a user from in-memory auth store."""
+    for user_data in auth_users_db.values():
+        if user_data.get("id") == user_id:
+            return user_data.get("latest_login_password")
+    return None
