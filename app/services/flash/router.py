@@ -974,12 +974,9 @@ async def update_user_profile(
                 detail="You can only update your own profile"
             )
         
-        # Check if profile exists
-        if user_id not in user_profiles_db:
-            raise HTTPException(status_code=404, detail=f"User profile not found: {user_id}")
-        
-        # Get existing profile
-        profile = user_profiles_db[user_id]
+        # Upsert behavior: if profile is missing (common with in-memory storage),
+        # start from fallback profile and persist it after applying updates.
+        profile = user_profiles_db.get(user_id) or _build_user_profile(user_id)
         
         # Update only provided fields (use model_dump for Pydantic v2)
         update_data = request.model_dump(exclude_unset=True, by_alias=False)

@@ -219,18 +219,71 @@ class ValidationResult(BaseModel):
 
 
 # ===== User Profile Models =====
+def _normalize_profile_payload_keys(data: Any) -> Any:
+    """Normalize common browser/extension profile keys to API model keys."""
+    if not isinstance(data, dict):
+        return data
+
+    normalized = dict(data)
+
+    key_mapping = {
+        "source--source": "referral_source",
+        "country--country": "country",
+        "legalName--firstName": "first_name",
+        "legalName--lastName": "last_name",
+        "name--legalName--firstName": "first_name",
+        "name--legalName--lastName": "last_name",
+        "name--preferredCheck": "preferred_name_opt_in",
+        "preferredCheck": "preferred_name_opt_in",
+        "address--addressLine1": "address_line_1",
+        "address--addressLine2": "address_line_2",
+        "addressLine1": "address_line_1",
+        "addressLine2": "address_line_2",
+        "address--city": "city",
+        "address--countryRegion": "state",
+        "address--postalCode": "postal_code",
+        "address--regionSubdivision1": "county",
+        "countryRegion": "state",
+        "regionSubdivision1": "county",
+        "phoneNumber--phoneType": "phone_type",
+        "phoneType": "phone_type",
+        "phoneNumber--countryPhoneCode": "country_phone_code",
+        "phoneNumber--phoneNumber": "phone",
+        "phoneNumber--extension": "phone_extension",
+        "phoneNumber": "phone",
+        "extension": "phone_extension",
+        "phone-sms-opt-in": "phone_sms_opt_in",
+    }
+
+    for source_key, target_key in key_mapping.items():
+        if target_key not in normalized and source_key in normalized:
+            normalized[target_key] = normalized[source_key]
+
+    return normalized
+
+
 class UserProfile(BaseModel):
     """User profile with structured data"""
     user_id: str
     full_name: str = Field(alias="name")  # Accept both 'name' and 'full_name'
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
     email: str
     password: Optional[str] = None  # In production, this should be hashed
+    referral_source: Optional[str] = None
+    preferred_name_opt_in: Optional[bool] = None
+    preferred_name: Optional[str] = None
     phone: Optional[str] = None
+    phone_type: Optional[str] = None
+    country_phone_code: Optional[str] = None
+    phone_extension: Optional[str] = None
+    phone_sms_opt_in: Optional[bool] = None
     location: Optional[str] = None
     address_line_1: Optional[str] = None
     address_line_2: Optional[str] = None
     city: Optional[str] = None
     state: Optional[str] = None
+    county: Optional[str] = None
     postal_code: Optional[str] = None
     country: Optional[str] = None
     linkedin_url: Optional[str] = None
@@ -282,14 +335,24 @@ class UserProfile(BaseModel):
 class CreateUserProfileRequest(BaseModel):
     """Request to create a new user profile"""
     full_name: str = Field(alias="name")  # Accept both 'name' and 'full_name'
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
     email: str
     password: Optional[str] = None
+    referral_source: Optional[str] = None
+    preferred_name_opt_in: Optional[bool] = None
+    preferred_name: Optional[str] = None
     phone: Optional[str] = None
+    phone_type: Optional[str] = None
+    country_phone_code: Optional[str] = None
+    phone_extension: Optional[str] = None
+    phone_sms_opt_in: Optional[bool] = None
     location: Optional[str] = None
     address_line_1: Optional[str] = None
     address_line_2: Optional[str] = None
     city: Optional[str] = None
     state: Optional[str] = None
+    county: Optional[str] = None
     postal_code: Optional[str] = None
     country: Optional[str] = None
     linkedin_url: Optional[str] = None
@@ -336,26 +399,38 @@ class CreateUserProfileRequest(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def normalize_password_key(cls, data: Any) -> Any:
-        """Accept common typo key from clients: passoword -> password."""
-        if not isinstance(data, dict):
-            return data
-        normalized = dict(data)
+        """Normalize common client payload key variants."""
+        normalized = _normalize_profile_payload_keys(data)
+        if not isinstance(normalized, dict):
+            return normalized
         if "password" not in normalized and "passoword" in normalized:
             normalized["password"] = normalized["passoword"]
+        if isinstance(normalized.get("links"), list) and len(normalized["links"]) == 0:
+            normalized["links"] = None
         return normalized
 
 
 class UpdateUserProfileRequest(BaseModel):
     """Request to update user profile - all fields optional"""
     full_name: Optional[str] = Field(None, alias="name")  # Accept both 'name' and 'full_name'
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
     email: Optional[str] = None
     password: Optional[str] = None
+    referral_source: Optional[str] = None
+    preferred_name_opt_in: Optional[bool] = None
+    preferred_name: Optional[str] = None
     phone: Optional[str] = None
+    phone_type: Optional[str] = None
+    country_phone_code: Optional[str] = None
+    phone_extension: Optional[str] = None
+    phone_sms_opt_in: Optional[bool] = None
     location: Optional[str] = None
     address_line_1: Optional[str] = None
     address_line_2: Optional[str] = None
     city: Optional[str] = None
     state: Optional[str] = None
+    county: Optional[str] = None
     postal_code: Optional[str] = None
     country: Optional[str] = None
     linkedin_url: Optional[str] = None
@@ -403,12 +478,14 @@ class UpdateUserProfileRequest(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def normalize_password_key(cls, data: Any) -> Any:
-        """Accept common typo key from clients: passoword -> password."""
-        if not isinstance(data, dict):
-            return data
-        normalized = dict(data)
+        """Normalize common client payload key variants."""
+        normalized = _normalize_profile_payload_keys(data)
+        if not isinstance(normalized, dict):
+            return normalized
         if "password" not in normalized and "passoword" in normalized:
             normalized["password"] = normalized["passoword"]
+        if isinstance(normalized.get("links"), list) and len(normalized["links"]) == 0:
+            normalized["links"] = None
         return normalized
 
 
