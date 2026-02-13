@@ -5,6 +5,7 @@ RAG-based system to answer application questions using user profile and resume
 from typing import List, Dict, Optional, Any
 from datetime import datetime
 from pathlib import Path
+import logging
 
 from app.services.flash.models import (
     QuestionContext,
@@ -13,6 +14,8 @@ from app.services.flash.models import (
     ConfidenceLevel,
     UserProfile
 )
+
+logger = logging.getLogger(__name__)
 
 
 class QuestionAnsweringService:
@@ -62,11 +65,21 @@ class QuestionAnsweringService:
         Returns:
             Answer with confidence score and sources
         """
+        logger.info(
+            "[qa_engine] answer_question start field_id=%s question=%s",
+            context.field_id,
+            context.question,
+        )
         # Retrieve relevant context
         retrieved_context = await self._retrieve_context(
             context.question,
             user_profile,
             context.resume_path
+        )
+        logger.info(
+            "[qa_engine] context retrieved field_id=%s sources=%d",
+            context.field_id,
+            len(retrieved_context),
         )
         
         # Generate answer using LLM
@@ -74,6 +87,12 @@ class QuestionAnsweringService:
             context,
             retrieved_context,
             user_profile
+        )
+        logger.info(
+            "[qa_engine] answer generated field_id=%s confidence_score=%.2f answer_len=%d",
+            context.field_id,
+            confidence_score,
+            len(answer or ""),
         )
         
         # Determine confidence level
@@ -140,7 +159,11 @@ class QuestionAnsweringService:
         
         # Sort by relevance
         sources.sort(key=lambda x: x.relevance_score, reverse=True)
-        
+        logger.info(
+            "[qa_engine] retrieve_context done question=%s top_source=%s",
+            question,
+            sources[0].source_type if sources else "none",
+        )
         return sources[:5]  # Top 5 most relevant
     
     def _extract_from_profile(
@@ -264,6 +287,11 @@ class QuestionAnsweringService:
         """
         # Use LLM whenever available.
         if self.llm_client:
+            logger.info(
+                "[qa_engine] using_llm field_id=%s sources=%d",
+                context.field_id,
+                len(retrieved_sources),
+            )
             prompt = self._build_qa_prompt(context, retrieved_sources, user_profile)
             answer = await self._call_llm(prompt)
             if answer and answer.strip():
@@ -276,8 +304,13 @@ class QuestionAnsweringService:
 
         # Fallback: Use profile data directly
         if retrieved_sources:
+            logger.info(
+                "[qa_engine] fallback_source_used field_id=%s source_type=%s",
+                context.field_id,
+                retrieved_sources[0].source_type,
+            )
             return retrieved_sources[0].content, 0.6
-        
+        logger.warning("[qa_engine] no_context_no_answer field_id=%s", context.field_id)
         return "Unable to answer this question with available information.", 0.2
     
     def _build_qa_prompt(
@@ -366,6 +399,7 @@ Provide 3 different professional answers, each on a new line.
     async def _call_llm(self, prompt: str) -> str:
         """Call LLM for text generation"""
         if not self.llm_client:
+            logger.warning("[qa_engine] llm_client_not_configured")
             return ""
 
         try:
@@ -379,12 +413,15 @@ Provide 3 different professional answers, each on a new line.
                 },
                 {"role": "user", "content": prompt},
             ]
-            return await self.llm_client.chat_completion(
+            response = await self.llm_client.chat_completion(
                 messages=messages,
                 temperature=0.3,
                 max_tokens=300
             )
+            logger.info("[qa_engine] llm_response_received chars=%d", len(response or ""))
+            return response
         except Exception:
+            logger.exception("[qa_engine] llm_call_failed")
             return ""
     
     async def store_approved_answer(

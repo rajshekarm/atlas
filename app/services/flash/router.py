@@ -590,7 +590,12 @@ async def fill_application(request: FillApplicationRequest):
 async def fill_application_form(request: FillApplicationFormRequest):
     """Fill application answers using the extracted form fields."""
     try:
-        print("received user id", request.user_id)
+        logger.info(
+            "[fill-application-form] request received user_id=%s job_id=%s field_count=%d",
+            request.user_id,
+            request.job_id or "unknown_job",
+            len(request.form_fields),
+        )
         user_profile = _build_user_profile(request.user_id)
         answers: List[QuestionAnswer] = []
         warnings: List[str] = []
@@ -620,10 +625,56 @@ async def fill_application_form(request: FillApplicationFormRequest):
             for field in request.form_fields
         )
         is_auth_page = has_password_field and any(keyword in page_text for keyword in auth_keywords)
+        logger.info(
+            "[fill-application-form] page classified is_auth_page=%s has_password_field=%s",
+            is_auth_page,
+            has_password_field,
+        )
 
-        for field in request.form_fields:
+        for index, field in enumerate(request.form_fields, start=1):
+            logger.info(
+                "[fill-application-form] processing field %d/%d field_id=%s field_name=%s type=%s required=%s",
+                index,
+                len(request.form_fields),
+                field.field_id,
+                field.field_name,
+                field.field_type,
+                field.required,
+            )
+            field_text = _norm(field.label, field.field_name, field.placeholder)
+
+            # Always handle password fields deterministically from profile.
+            # This prevents password fields from reaching QA and returning "Not provided".
+            if "password" in field_text:
+                password_answer = user_profile.password or ""
+                if not password_answer and field.required:
+                    warnings.append(f"Missing value for auth field: {field.field_name or field.field_id}")
+
+                direct_password_answer = QuestionAnswer(
+                    field_id=field.field_id,
+                    question=field.label or field.field_name or field.field_id,
+                    answer=password_answer,
+                    confidence=ConfidenceLevel.HIGH if password_answer else ConfidenceLevel.LOW,
+                    confidence_score=1.0 if password_answer else 0.2,
+                    sources=[
+                        AnswerSource(
+                            source_type="profile",
+                            content="user_profile",
+                            relevance_score=1.0 if password_answer else 0.2
+                        )
+                    ],
+                    requires_review=False if password_answer else True
+                )
+                answers.append(direct_password_answer)
+                confidence_accumulator += direct_password_answer.confidence_score
+                logger.info(
+                    "[fill-application-form] password answer prepared field_id=%s answer_len=%d",
+                    field.field_id,
+                    len(password_answer),
+                )
+                continue
+
             if is_auth_page:
-                field_text = _norm(field.label, field.field_name, field.placeholder)
                 answer_text = ""
 
                 if "password" in field_text:
@@ -660,6 +711,12 @@ async def fill_application_form(request: FillApplicationFormRequest):
                 )
                 answers.append(direct_answer)
                 confidence_accumulator += direct_answer.confidence_score
+                logger.info(
+                    "[fill-application-form] auth answer prepared field_id=%s answer_len=%d confidence=%.2f",
+                    field.field_id,
+                    len(direct_answer.answer or ""),
+                    direct_answer.confidence_score,
+                )
                 continue
 
             question_text = field.label or field.field_name or field.field_id
@@ -672,14 +729,30 @@ async def fill_application_form(request: FillApplicationFormRequest):
                 resume_path=user_profile.master_resume_path or "./data/resumes/master_resume.txt",
                 user_profile=user_profile.dict()
             )
-            print("finding answers")
+            logger.info(
+                "[fill-application-form] sending field to QA field_id=%s question=%s",
+                field.field_id,
+                question_text,
+            )
             answer = await qa_engine.answer_question(context, user_profile)
             answers.append(answer)
             confidence_accumulator += answer.confidence_score
+            logger.info(
+                "[fill-application-form] QA answer ready field_id=%s confidence=%.2f requires_review=%s",
+                answer.field_id,
+                answer.confidence_score,
+                answer.requires_review,
+            )
 
         overall_confidence = (
             confidence_accumulator / len(answers)
             if answers else 0.0
+        )
+        logger.info(
+            "[fill-application-form] response prepared answers=%d overall_confidence=%.2f warnings=%d",
+            len(answers),
+            overall_confidence,
+            len(warnings),
         )
 
         return FillApplicationFormResponse(
