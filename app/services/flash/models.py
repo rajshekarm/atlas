@@ -86,6 +86,13 @@ class FormField(BaseModel):
             normalized["field_id"] = normalized["id"]
         if "field_type" not in normalized and "type" in normalized:
             normalized["field_type"] = normalized["type"]
+        if normalized.get("field_type") == "select":
+            # Browser extractor uses "select"; backend enum expects "dropdown".
+            normalized["field_type"] = "dropdown"
+        if normalized.get("field_type") == "password":
+            # Backend schema does not include a dedicated password enum.
+            # Treat password inputs as text for validation/answer generation.
+            normalized["field_type"] = "text"
         if "field_name" not in normalized:
             normalized["field_name"] = (
                 normalized.get("name")

@@ -604,8 +604,26 @@ async def fill_application_form(request: FillApplicationFormRequest):
             len(request.form_fields),
         )
         profile_overrides = dict(request.user_profile or {})
+        # Normalize common frontend keys before applying overrides.
+        if "full_name" not in profile_overrides and "name" in profile_overrides:
+            profile_overrides["full_name"] = profile_overrides["name"]
+        if "phone" not in profile_overrides and "phoneNumber" in profile_overrides:
+            profile_overrides["phone"] = profile_overrides["phoneNumber"]
+        if "address_line_1" not in profile_overrides and "addressLine1" in profile_overrides:
+            profile_overrides["address_line_1"] = profile_overrides["addressLine1"]
+        if "address_line_2" not in profile_overrides and "addressLine2" in profile_overrides:
+            profile_overrides["address_line_2"] = profile_overrides["addressLine2"]
+        if "state" not in profile_overrides and "countryRegion" in profile_overrides:
+            profile_overrides["state"] = profile_overrides["countryRegion"]
+        if "postal_code" not in profile_overrides and "postalCode" in profile_overrides:
+            profile_overrides["postal_code"] = profile_overrides["postalCode"]
+        if "country_phone_code" not in profile_overrides and "phoneNumber--countryPhoneCode" in profile_overrides:
+            profile_overrides["country_phone_code"] = profile_overrides["phoneNumber--countryPhoneCode"]
+        if "phone_extension" not in profile_overrides and "phoneNumber--extension" in profile_overrides:
+            profile_overrides["phone_extension"] = profile_overrides["phoneNumber--extension"]
         if "password" not in profile_overrides and "passoword" in profile_overrides:
             profile_overrides["password"] = profile_overrides["passoword"]
+        profile_overrides.pop("id", None)
         user_profile = _build_user_profile(
             request.user_id,
             overrides=profile_overrides or None
@@ -644,18 +662,79 @@ async def fill_application_form(request: FillApplicationFormRequest):
             is_auth_page,
             has_password_field,
         )
+        url_pool: List[str] = [
+            url.strip()
+            for url in [
+                user_profile.linkedin_url,
+                user_profile.github_url,
+                user_profile.portfolio_url,
+                user_profile.website_url,
+                user_profile.twitter_url,
+                user_profile.workday_profile_url,
+            ]
+            if isinstance(url, str) and url.strip()
+        ]
+        used_urls: set[str] = set()
 
-        for index, field in enumerate(request.form_fields, start=1):
+        def _consume_next_url(preferred: Optional[str] = None) -> str:
+            if preferred and preferred.strip():
+                preferred_value = preferred.strip()
+                if preferred_value not in used_urls:
+                    used_urls.add(preferred_value)
+                    return preferred_value
+            for candidate in url_pool:
+                if candidate not in used_urls:
+                    used_urls.add(candidate)
+                    return candidate
+            return preferred.strip() if isinstance(preferred, str) and preferred.strip() else ""
+
+        # Workday often emits duplicate logical questions (hidden text + visible dropdown).
+        # Keep a single best candidate per logical question to avoid conflicting answers.
+        field_priority = {
+            "dropdown": 4,
+            "radio": 4,
+            "checkbox": 3,
+            "textarea": 2,
+            "text": 1,
+            "email": 1,
+            "phone": 1,
+            "date": 1,
+            "file": 1,
+        }
+        deduped_by_key: Dict[str, Any] = {}
+        for raw_field in request.form_fields:
+            dedupe_key = _norm(raw_field.label, raw_field.placeholder, raw_field.field_name)
+            if not dedupe_key:
+                dedupe_key = _norm(raw_field.field_id)
+            current = deduped_by_key.get(dedupe_key)
+            if current is None:
+                deduped_by_key[dedupe_key] = raw_field
+                continue
+
+            current_score = field_priority.get(str(current.field_type), 0) + (2 if current.options else 0) + (1 if current.required else 0)
+            new_score = field_priority.get(str(raw_field.field_type), 0) + (2 if raw_field.options else 0) + (1 if raw_field.required else 0)
+            if new_score >= current_score:
+                deduped_by_key[dedupe_key] = raw_field
+
+        selected_fields = list(deduped_by_key.values())
+        logger.info(
+            "[fill-application-form] deduped fields original=%d selected=%d",
+            len(request.form_fields),
+            len(selected_fields),
+        )
+
+        for index, field in enumerate(selected_fields, start=1):
             logger.info(
                 "[fill-application-form] processing field %d/%d field_id=%s field_name=%s type=%s required=%s",
                 index,
-                len(request.form_fields),
+                len(selected_fields),
                 field.field_id,
                 field.field_name,
                 field.field_type,
                 field.required,
             )
             field_text = _norm(field.label, field.field_name, field.placeholder)
+            field_key = _norm(field.field_id, field.field_name, field.label)
 
             # Always handle password fields deterministically from profile.
             # This prevents password fields from reaching QA and returning "Not provided".
@@ -685,6 +764,123 @@ async def fill_application_form(request: FillApplicationFormRequest):
                     "[fill-application-form] password answer prepared field_id=%s answer_len=%d",
                     field.field_id,
                     len(password_answer),
+                )
+                continue
+
+            # Deterministic profile mapping for common personal/contact fields.
+            # This avoids sending obvious profile-backed fields to QA, which can
+            # otherwise return "Not provided" for structured data.
+            direct_profile_answer: Optional[str] = None
+            if "email" in field_text:
+                direct_profile_answer = user_profile.email or ""
+            elif "first name" in field_text or "firstname" in field_key:
+                direct_profile_answer = (
+                    user_profile.first_name
+                    or ((user_profile.full_name or "").split(" ")[0] if user_profile.full_name else "")
+                )
+            elif "last name" in field_text or "lastname" in field_key:
+                direct_profile_answer = (
+                    user_profile.last_name
+                    or (
+                        user_profile.full_name.split(" ", 1)[1]
+                        if user_profile.full_name and " " in user_profile.full_name
+                        else ""
+                    )
+                )
+            elif "full name" in field_text or field_text == "name":
+                direct_profile_answer = user_profile.full_name or ""
+            elif "address line 1" in field_text or "addressline1" in field_key:
+                direct_profile_answer = user_profile.address_line_1 or ""
+            elif "address line 2" in field_text or "addressline2" in field_key:
+                direct_profile_answer = user_profile.address_line_2 or ""
+            elif "city" in field_text:
+                direct_profile_answer = user_profile.city or ""
+            elif (
+                "state" in field_text
+                or "province" in field_text
+                or "countryregion" in field_key
+                or "region" in field_key
+            ):
+                direct_profile_answer = user_profile.state or ""
+            elif "postal code" in field_text or "zip" in field_text or "postalcode" in field_key:
+                direct_profile_answer = user_profile.postal_code or ""
+            elif "county" in field_text:
+                direct_profile_answer = user_profile.county or ""
+            elif "country" in field_text:
+                direct_profile_answer = user_profile.country or ""
+            elif "phone extension" in field_text or "extension" in field_key:
+                direct_profile_answer = user_profile.phone_extension or ""
+            elif "phone device type" in field_text or "phonetype" in field_key:
+                direct_profile_answer = user_profile.phone_type or ""
+            elif "country phone code" in field_text or "countryphonecode" in field_key:
+                direct_profile_answer = user_profile.country_phone_code or ""
+            elif "phone" in field_text:
+                direct_profile_answer = user_profile.phone or ""
+            elif "sponsorship" in field_text or "visa" in field_text:
+                if user_profile.requires_visa_sponsorship is not None:
+                    direct_profile_answer = "Yes" if user_profile.requires_visa_sponsorship else "No"
+                elif user_profile.visa_status:
+                    direct_profile_answer = user_profile.visa_status
+            elif (
+                "legally authorized" in field_text
+                or "authorized to work" in field_text
+                or ("authorization" in field_text and "work" in field_text)
+            ):
+                if user_profile.legally_authorized_to_work is not None:
+                    direct_profile_answer = "Yes" if user_profile.legally_authorized_to_work else "No"
+                elif user_profile.work_authorization:
+                    direct_profile_answer = user_profile.work_authorization
+            elif (
+                "github" in field_text
+                or "github" in field_key
+                or "linkedin" in field_text
+                or "linkedin" in field_key
+                or "portfolio" in field_text
+                or "portfolio" in field_key
+                or "website" in field_text
+                or "website" in field_key
+                or "url" in field_text
+                or "link" in field_text
+                or "webaddress" in field_key
+            ):
+                if "github" in field_text or "github" in field_key:
+                    direct_profile_answer = _consume_next_url(user_profile.github_url)
+                elif "linkedin" in field_text or "linkedin" in field_key:
+                    direct_profile_answer = _consume_next_url(user_profile.linkedin_url)
+                elif "portfolio" in field_text or "portfolio" in field_key:
+                    direct_profile_answer = _consume_next_url(user_profile.portfolio_url)
+                elif "twitter" in field_text or "twitter" in field_key:
+                    direct_profile_answer = _consume_next_url(user_profile.twitter_url)
+                elif "workday" in field_text or "workday" in field_key:
+                    direct_profile_answer = _consume_next_url(user_profile.workday_profile_url)
+                else:
+                    direct_profile_answer = _consume_next_url(user_profile.website_url)
+
+            if direct_profile_answer is not None:
+                if not direct_profile_answer and field.required:
+                    warnings.append(f"Missing value for profile field: {field.field_name or field.field_id}")
+
+                direct_answer = QuestionAnswer(
+                    field_id=field.field_id,
+                    question=field.label or field.field_name or field.field_id,
+                    answer=direct_profile_answer,
+                    confidence=ConfidenceLevel.HIGH if direct_profile_answer else ConfidenceLevel.LOW,
+                    confidence_score=1.0 if direct_profile_answer else 0.2,
+                    sources=[
+                        AnswerSource(
+                            source_type="profile",
+                            content="user_profile",
+                            relevance_score=1.0 if direct_profile_answer else 0.2
+                        )
+                    ],
+                    requires_review=False if direct_profile_answer else True
+                )
+                answers.append(direct_answer)
+                confidence_accumulator += direct_answer.confidence_score
+                logger.info(
+                    "[fill-application-form] direct profile answer field_id=%s answer_len=%d",
+                    field.field_id,
+                    len(direct_answer.answer or ""),
                 )
                 continue
 
