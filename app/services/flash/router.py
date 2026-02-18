@@ -38,8 +38,10 @@ from app.services.flash.models import (
     JobAnalysis,
     ResumeTailoringResponse,
     QuestionAnswer,
+    QuestionContext,
     AnswerSource,
     ConfidenceLevel,
+    FieldType,
     ApplicationReview,
     SubmissionResult,
     ErrorResponse,
@@ -595,16 +597,26 @@ async def fill_application(request: FillApplicationRequest):
 # ===== Field-Level Form Filling =====
 @router.post("/fill-application-form", response_model=FillApplicationFormResponse)
 async def fill_application_form(request: FillApplicationFormRequest):
-    """Fill application answers using the extracted form fields."""
+    """Fill application answers using extracted logical questions."""
+    import time
+    import uuid
+    from datetime import datetime
+
+    request_id = uuid.uuid4().hex[:10]
+    started_at = time.perf_counter()
+
     try:
+        question_types = sorted({question.question_type for question in request.questions})
         logger.info(
-            "[fill-application-form] request received user_id=%s job_id=%s field_count=%d",
+            "[fill-application-form] request_id=%s user_id=%s job_id=%s question_count=%d question_types=%s",
+            request_id,
             request.user_id,
             request.job_id or "unknown_job",
-            len(request.form_fields),
+            len(request.questions),
+            ",".join(question_types),
         )
+
         profile_overrides = dict(request.user_profile or {})
-        # Normalize common frontend keys before applying overrides.
         if "full_name" not in profile_overrides and "name" in profile_overrides:
             profile_overrides["full_name"] = profile_overrides["name"]
         if "phone" not in profile_overrides and "phoneNumber" in profile_overrides:
@@ -624,356 +636,276 @@ async def fill_application_form(request: FillApplicationFormRequest):
         if "password" not in profile_overrides and "passoword" in profile_overrides:
             profile_overrides["password"] = profile_overrides["passoword"]
         profile_overrides.pop("id", None)
-        user_profile = _build_user_profile(
-            request.user_id,
-            overrides=profile_overrides or None
-        )
+
+        user_profile = _build_user_profile(request.user_id, overrides=profile_overrides or None)
         auth_password = _get_auth_password(request.user_id) or ""
-        answers: List[QuestionAnswer] = []
-        warnings: List[str] = []
-        confidence_accumulator = 0.0
+        answers: List[FillApplicationFormResponse.FilledQuestionAnswer] = []
 
         def _norm(*values: Optional[str]) -> str:
-            return " ".join([(v or "").strip().lower() for v in values]).strip()
+            return " ".join([(value or "").strip().lower() for value in values]).strip()
 
-        auth_keywords = (
-            "sign in",
-            "signin",
-            "login",
-            "log in",
-            "sign up",
-            "signup",
-            "register",
-            "create account",
-            "account",
-        )
+        def _target_field_ids(question: FillApplicationFormRequest.ApplicationQuestion) -> List[str]:
+            ids = [field_id.strip() for field_id in question.field_ids if isinstance(field_id, str) and field_id.strip()]
+            return ids or [question.question_id]
 
-        page_text = " ".join(
-            _norm(field.label, field.field_name, field.placeholder)
-            for field in request.form_fields
-        )
-        has_password_field = any(
-            "password" in _norm(field.label, field.field_name, field.placeholder)
-            for field in request.form_fields
-        )
-        is_auth_page = has_password_field and any(keyword in page_text for keyword in auth_keywords)
-        logger.info(
-            "[fill-application-form] page classified is_auth_page=%s has_password_field=%s",
-            is_auth_page,
-            has_password_field,
-        )
-        url_pool: List[str] = [
-            url.strip()
-            for url in [
+        def _map_question_type(question_type: str) -> FieldType:
+            mapping = {
+                "single_choice": FieldType.DROPDOWN,
+                "multi_choice": FieldType.CHECKBOX,
+                "free_text": FieldType.TEXT,
+                "date": FieldType.DATE,
+                "file": FieldType.FILE,
+                "boolean": FieldType.RADIO,
+            }
+            return mapping.get(question_type, FieldType.TEXT)
+
+        def _consume_next_url(preferred: Optional[str] = None) -> str:
+            if preferred and preferred.strip():
+                return preferred.strip()
+            for candidate in [
                 user_profile.linkedin_url,
                 user_profile.github_url,
                 user_profile.portfolio_url,
                 user_profile.website_url,
                 user_profile.twitter_url,
                 user_profile.workday_profile_url,
-            ]
-            if isinstance(url, str) and url.strip()
-        ]
-        used_urls: set[str] = set()
+            ]:
+                if isinstance(candidate, str) and candidate.strip():
+                    return candidate.strip()
+            return ""
 
-        def _consume_next_url(preferred: Optional[str] = None) -> str:
-            if preferred and preferred.strip():
-                preferred_value = preferred.strip()
-                if preferred_value not in used_urls:
-                    used_urls.add(preferred_value)
-                    return preferred_value
-            for candidate in url_pool:
-                if candidate not in used_urls:
-                    used_urls.add(candidate)
-                    return candidate
-            return preferred.strip() if isinstance(preferred, str) and preferred.strip() else ""
+        def _infer_profile_answer(question_text: str, question_key: str) -> Optional[str]:
+            if "password" in question_text:
+                return auth_password or user_profile.password or ""
+            if "email" in question_text:
+                return user_profile.email or ""
+            if "first name" in question_text or "firstname" in question_key:
+                return user_profile.first_name or ((user_profile.full_name or "").split(" ")[0] if user_profile.full_name else "")
+            if "last name" in question_text or "lastname" in question_key:
+                if user_profile.last_name:
+                    return user_profile.last_name
+                if user_profile.full_name and " " in user_profile.full_name:
+                    return user_profile.full_name.split(" ", 1)[1]
+                return ""
+            if "full name" in question_text or question_text == "name":
+                return user_profile.full_name or ""
+            if "address line 1" in question_text or "addressline1" in question_key:
+                return user_profile.address_line_1 or ""
+            if "address line 2" in question_text or "addressline2" in question_key:
+                return user_profile.address_line_2 or ""
+            if "city" in question_text:
+                return user_profile.city or ""
+            if "state" in question_text or "province" in question_text or "countryregion" in question_key or "region" in question_key:
+                return user_profile.state or ""
+            if "postal code" in question_text or "zip" in question_text or "postalcode" in question_key:
+                return user_profile.postal_code or ""
+            if "county" in question_text:
+                return user_profile.county or ""
+            if "country" in question_text:
+                return user_profile.country or ""
+            if "phone extension" in question_text or "extension" in question_key:
+                return user_profile.phone_extension or ""
+            if "phone device type" in question_text or "phonetype" in question_key:
+                return user_profile.phone_type or ""
+            if "country phone code" in question_text or "countryphonecode" in question_key:
+                return user_profile.country_phone_code or ""
+            if "phone" in question_text:
+                return user_profile.phone or ""
+            if "sponsorship" in question_text or "visa" in question_text:
+                if user_profile.requires_visa_sponsorship is not None:
+                    return "true" if user_profile.requires_visa_sponsorship else "false"
+                if user_profile.visa_status:
+                    return user_profile.visa_status
+            if "legally authorized" in question_text or "authorized to work" in question_text or ("authorization" in question_text and "work" in question_text):
+                if user_profile.legally_authorized_to_work is not None:
+                    return "true" if user_profile.legally_authorized_to_work else "false"
+                if user_profile.work_authorization:
+                    return user_profile.work_authorization
+            if "github" in question_text or "linkedin" in question_text or "portfolio" in question_text or "website" in question_text or "url" in question_text or "link" in question_text or "webaddress" in question_key:
+                if "github" in question_text or "github" in question_key:
+                    return _consume_next_url(user_profile.github_url)
+                if "linkedin" in question_text or "linkedin" in question_key:
+                    return _consume_next_url(user_profile.linkedin_url)
+                if "portfolio" in question_text or "portfolio" in question_key:
+                    return _consume_next_url(user_profile.portfolio_url)
+                if "twitter" in question_text or "twitter" in question_key:
+                    return _consume_next_url(user_profile.twitter_url)
+                if "workday" in question_text or "workday" in question_key:
+                    return _consume_next_url(user_profile.workday_profile_url)
+                return _consume_next_url(user_profile.website_url)
+            return None
 
-        # Workday often emits duplicate logical questions (hidden text + visible dropdown).
-        # Keep a single best candidate per logical question to avoid conflicting answers.
-        field_priority = {
-            "dropdown": 4,
-            "radio": 4,
-            "checkbox": 3,
-            "textarea": 2,
-            "text": 1,
-            "email": 1,
-            "phone": 1,
-            "date": 1,
-            "file": 1,
-        }
-        deduped_by_key: Dict[str, Any] = {}
-        for raw_field in request.form_fields:
-            dedupe_key = _norm(raw_field.label, raw_field.placeholder, raw_field.field_name)
-            if not dedupe_key:
-                dedupe_key = _norm(raw_field.field_id)
-            current = deduped_by_key.get(dedupe_key)
-            if current is None:
-                deduped_by_key[dedupe_key] = raw_field
-                continue
+        def _parse_bool(value: str) -> Optional[bool]:
+            raw = _norm(value)
+            if raw in {"true", "yes", "y", "1", "authorized"}:
+                return True
+            if raw in {"false", "no", "n", "0", "not authorized"}:
+                return False
+            return None
 
-            current_score = field_priority.get(str(current.field_type), 0) + (2 if current.options else 0) + (1 if current.required else 0)
-            new_score = field_priority.get(str(raw_field.field_type), 0) + (2 if raw_field.options else 0) + (1 if raw_field.required else 0)
-            if new_score >= current_score:
-                deduped_by_key[dedupe_key] = raw_field
+        def _normalize_date(raw_value: str) -> str:
+            cleaned = (raw_value or "").strip()
+            if not cleaned:
+                return ""
+            for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m-%d-%Y", "%d/%m/%Y", "%Y/%m/%d"):
+                try:
+                    return datetime.strptime(cleaned, fmt).strftime("%Y-%m-%d")
+                except ValueError:
+                    continue
+            try:
+                return datetime.fromisoformat(cleaned.replace("Z", "+00:00")).date().isoformat()
+            except ValueError:
+                return ""
 
-        selected_fields = list(deduped_by_key.values())
-        logger.info(
-            "[fill-application-form] deduped fields original=%d selected=%d",
-            len(request.form_fields),
-            len(selected_fields),
-        )
+        def _select_single_choice(raw_value: str, options: List[str]) -> str:
+            if not options:
+                return (raw_value or "").strip()
+            normalized_answer = _norm(raw_value)
+            if normalized_answer:
+                for option in options:
+                    if _norm(option) == normalized_answer or _norm(option) in normalized_answer or normalized_answer in _norm(option):
+                        return option
+            return options[0]
 
-        for index, field in enumerate(selected_fields, start=1):
-            logger.info(
-                "[fill-application-form] processing field %d/%d field_id=%s field_name=%s type=%s required=%s",
-                index,
-                len(selected_fields),
-                field.field_id,
-                field.field_name,
-                field.field_type,
-                field.required,
-            )
-            field_text = _norm(field.label, field.field_name, field.placeholder)
-            field_key = _norm(field.field_id, field.field_name, field.label)
+        def _select_multi_choice(raw_value: str, options: List[str], required: bool) -> str:
+            if not options:
+                return (raw_value or "").strip()
+            normalized_answer = _norm(raw_value)
+            chosen: List[str] = []
+            for option in options:
+                option_norm = _norm(option)
+                if option_norm and option_norm in normalized_answer:
+                    chosen.append(option)
+            if chosen:
+                return ", ".join(chosen)
+            if required:
+                return options[0]
+            return ""
 
-            # Always handle password fields deterministically from profile.
-            # This prevents password fields from reaching QA and returning "Not provided".
-            if "password" in field_text:
-                password_answer = auth_password or user_profile.password or ""
-                if not password_answer and field.required:
-                    warnings.append(f"Missing value for auth field: {field.field_name or field.field_id}")
+        def _normalize_answer_for_type(
+            question: FillApplicationFormRequest.ApplicationQuestion,
+            raw_value: str,
+            confidence: float,
+            sources: List[str],
+        ) -> tuple[str, float, List[str]]:
+            raw_value = (raw_value or "").strip()
+            confidence = max(0.0, min(confidence, 1.0))
+            if question.question_type == "file":
+                return "Manual upload required: attach the requested file.", 0.85, ["file_upload_manual"]
+            if question.question_type == "boolean":
+                parsed = _parse_bool(raw_value)
+                if parsed is None:
+                    return ("", 0.15 if not question.required else 0.05, sources + ["insufficient_context_boolean"])
+                return ("true" if parsed else "false", confidence, sources)
+            if question.question_type == "date":
+                normalized = _normalize_date(raw_value)
+                if normalized:
+                    return (normalized, confidence, sources)
+                return ("", 0.15 if not question.required else 0.05, sources + ["insufficient_context_date"])
+            if question.question_type == "single_choice":
+                selected = _select_single_choice(raw_value, question.options or [])
+                if selected:
+                    return (selected, confidence, sources)
+                return ("", 0.15 if not question.required else 0.05, sources + ["insufficient_context_single_choice"])
+            if question.question_type == "multi_choice":
+                selected = _select_multi_choice(raw_value, question.options or [], question.required)
+                if selected:
+                    return (selected, confidence, sources)
+                return ("", 0.15 if not question.required else 0.05, sources + ["insufficient_context_multi_choice"])
+            return (raw_value, confidence, sources)
 
-                direct_password_answer = QuestionAnswer(
-                    field_id=field.field_id,
-                    question=field.label or field.field_name or field.field_id,
-                    answer=password_answer,
-                    confidence=ConfidenceLevel.HIGH if password_answer else ConfidenceLevel.LOW,
-                    confidence_score=1.0 if password_answer else 0.2,
-                    sources=[
-                        AnswerSource(
-                            source_type="profile",
-                            content="user_profile",
-                            relevance_score=1.0 if password_answer else 0.2
-                        )
-                    ],
-                    requires_review=False if password_answer else True
-                )
-                answers.append(direct_password_answer)
-                confidence_accumulator += direct_password_answer.confidence_score
-                logger.info(
-                    "[fill-application-form] password answer prepared field_id=%s answer_len=%d",
-                    field.field_id,
-                    len(password_answer),
-                )
-                continue
+        for question in request.questions:
+            field_ids = _target_field_ids(question)
+            field_id = field_ids[0]
+            question_text = (question.prompt or question.question_id or "").strip()
+            question_key = _norm(question.question_id, question.prompt)
+            normalized_prompt = _norm(question.prompt)
 
-            # Deterministic profile mapping for common personal/contact fields.
-            # This avoids sending obvious profile-backed fields to QA, which can
-            # otherwise return "Not provided" for structured data.
-            direct_profile_answer: Optional[str] = None
-            if "email" in field_text:
-                direct_profile_answer = user_profile.email or ""
-            elif "first name" in field_text or "firstname" in field_key:
-                direct_profile_answer = (
-                    user_profile.first_name
-                    or ((user_profile.full_name or "").split(" ")[0] if user_profile.full_name else "")
-                )
-            elif "last name" in field_text or "lastname" in field_key:
-                direct_profile_answer = (
-                    user_profile.last_name
-                    or (
-                        user_profile.full_name.split(" ", 1)[1]
-                        if user_profile.full_name and " " in user_profile.full_name
-                        else ""
+            try:
+                answer_text = ""
+                confidence = 0.2
+                sources: List[str] = []
+
+                profile_answer = _infer_profile_answer(normalized_prompt, question_key)
+                if profile_answer is not None:
+                    answer_text = profile_answer
+                    confidence = 0.95 if answer_text else (0.15 if not question.required else 0.05)
+                    sources = ["profile"]
+                else:
+                    context = QuestionContext(
+                        question=question_text,
+                        field_id=field_id,
+                        field_type=_map_question_type(question.question_type),
+                        job_id=request.job_id or "unknown_job",
+                        resume_path=user_profile.master_resume_path or "./data/resumes/master_resume.txt",
+                        user_profile=user_profile.model_dump(by_alias=False),
+                    )
+                    qa_answer = await qa_engine.answer_question(context, user_profile)
+                    answer_text = qa_answer.answer or ""
+                    confidence = qa_answer.confidence_score
+                    sources = [source.source_type for source in qa_answer.sources] if qa_answer.sources else ["qa"]
+
+                answer_text, confidence, sources = _normalize_answer_for_type(question, answer_text, confidence, sources)
+
+                if not answer_text and not question.required:
+                    sources = list(dict.fromkeys(sources + ["insufficient_context_optional"]))
+
+                answers.append(
+                    FillApplicationFormResponse.FilledQuestionAnswer(
+                        question_id=question.question_id,
+                        field_id=field_id,
+                        field_ids=field_ids,
+                        question=question_text,
+                        answer=answer_text,
+                        confidence=confidence,
+                        sources=list(dict.fromkeys([src for src in sources if src])),
                     )
                 )
-            elif "full name" in field_text or field_text == "name":
-                direct_profile_answer = user_profile.full_name or ""
-            elif "address line 1" in field_text or "addressline1" in field_key:
-                direct_profile_answer = user_profile.address_line_1 or ""
-            elif "address line 2" in field_text or "addressline2" in field_key:
-                direct_profile_answer = user_profile.address_line_2 or ""
-            elif "city" in field_text:
-                direct_profile_answer = user_profile.city or ""
-            elif (
-                "state" in field_text
-                or "province" in field_text
-                or "countryregion" in field_key
-                or "region" in field_key
-            ):
-                direct_profile_answer = user_profile.state or ""
-            elif "postal code" in field_text or "zip" in field_text or "postalcode" in field_key:
-                direct_profile_answer = user_profile.postal_code or ""
-            elif "county" in field_text:
-                direct_profile_answer = user_profile.county or ""
-            elif "country" in field_text:
-                direct_profile_answer = user_profile.country or ""
-            elif "phone extension" in field_text or "extension" in field_key:
-                direct_profile_answer = user_profile.phone_extension or ""
-            elif "phone device type" in field_text or "phonetype" in field_key:
-                direct_profile_answer = user_profile.phone_type or ""
-            elif "country phone code" in field_text or "countryphonecode" in field_key:
-                direct_profile_answer = user_profile.country_phone_code or ""
-            elif "phone" in field_text:
-                direct_profile_answer = user_profile.phone or ""
-            elif "sponsorship" in field_text or "visa" in field_text:
-                if user_profile.requires_visa_sponsorship is not None:
-                    direct_profile_answer = "Yes" if user_profile.requires_visa_sponsorship else "No"
-                elif user_profile.visa_status:
-                    direct_profile_answer = user_profile.visa_status
-            elif (
-                "legally authorized" in field_text
-                or "authorized to work" in field_text
-                or ("authorization" in field_text and "work" in field_text)
-            ):
-                if user_profile.legally_authorized_to_work is not None:
-                    direct_profile_answer = "Yes" if user_profile.legally_authorized_to_work else "No"
-                elif user_profile.work_authorization:
-                    direct_profile_answer = user_profile.work_authorization
-            elif (
-                "github" in field_text
-                or "github" in field_key
-                or "linkedin" in field_text
-                or "linkedin" in field_key
-                or "portfolio" in field_text
-                or "portfolio" in field_key
-                or "website" in field_text
-                or "website" in field_key
-                or "url" in field_text
-                or "link" in field_text
-                or "webaddress" in field_key
-            ):
-                if "github" in field_text or "github" in field_key:
-                    direct_profile_answer = _consume_next_url(user_profile.github_url)
-                elif "linkedin" in field_text or "linkedin" in field_key:
-                    direct_profile_answer = _consume_next_url(user_profile.linkedin_url)
-                elif "portfolio" in field_text or "portfolio" in field_key:
-                    direct_profile_answer = _consume_next_url(user_profile.portfolio_url)
-                elif "twitter" in field_text or "twitter" in field_key:
-                    direct_profile_answer = _consume_next_url(user_profile.twitter_url)
-                elif "workday" in field_text or "workday" in field_key:
-                    direct_profile_answer = _consume_next_url(user_profile.workday_profile_url)
-                else:
-                    direct_profile_answer = _consume_next_url(user_profile.website_url)
-
-            if direct_profile_answer is not None:
-                if not direct_profile_answer and field.required:
-                    warnings.append(f"Missing value for profile field: {field.field_name or field.field_id}")
-
-                direct_answer = QuestionAnswer(
-                    field_id=field.field_id,
-                    question=field.label or field.field_name or field.field_id,
-                    answer=direct_profile_answer,
-                    confidence=ConfidenceLevel.HIGH if direct_profile_answer else ConfidenceLevel.LOW,
-                    confidence_score=1.0 if direct_profile_answer else 0.2,
-                    sources=[
-                        AnswerSource(
-                            source_type="profile",
-                            content="user_profile",
-                            relevance_score=1.0 if direct_profile_answer else 0.2
-                        )
-                    ],
-                    requires_review=False if direct_profile_answer else True
+            except Exception as question_error:
+                logger.warning(
+                    "[fill-application-form] request_id=%s question_id=%s type=%s failed=%s",
+                    request_id,
+                    question.question_id,
+                    question.question_type,
+                    type(question_error).__name__,
                 )
-                answers.append(direct_answer)
-                confidence_accumulator += direct_answer.confidence_score
-                logger.info(
-                    "[fill-application-form] direct profile answer field_id=%s answer_len=%d",
-                    field.field_id,
-                    len(direct_answer.answer or ""),
+                fallback_confidence = 0.15 if not question.required else 0.05
+                answers.append(
+                    FillApplicationFormResponse.FilledQuestionAnswer(
+                        question_id=question.question_id,
+                        field_id=field_id,
+                        field_ids=field_ids,
+                        question=question_text,
+                        answer="",
+                        confidence=fallback_confidence,
+                        sources=["question_processing_failed", "insufficient_context_optional" if not question.required else "insufficient_context_required"],
+                    )
                 )
-                continue
-
-            if is_auth_page:
-                answer_text = ""
-
-                if "password" in field_text:
-                    answer_text = user_profile.password or ""
-                elif "email" in field_text or "username" in field_text:
-                    answer_text = user_profile.email or ""
-                elif "full name" in field_text or field_text == "name":
-                    answer_text = user_profile.full_name or ""
-                elif "first name" in field_text:
-                    answer_text = (user_profile.full_name or "").split(" ")[0] if user_profile.full_name else ""
-                elif "last name" in field_text:
-                    if user_profile.full_name and " " in user_profile.full_name:
-                        answer_text = user_profile.full_name.split(" ", 1)[1]
-                elif "phone" in field_text:
-                    answer_text = user_profile.phone or ""
-
-                if not answer_text and field.required:
-                    warnings.append(f"Missing value for auth field: {field.field_name or field.field_id}")
-
-                direct_answer = QuestionAnswer(
-                    field_id=field.field_id,
-                    question=field.label or field.field_name or field.field_id,
-                    answer=answer_text,
-                    confidence=ConfidenceLevel.HIGH if answer_text else ConfidenceLevel.LOW,
-                    confidence_score=1.0 if answer_text else 0.2,
-                    sources=[
-                        AnswerSource(
-                            source_type="profile",
-                            content="user_profile",
-                            relevance_score=1.0 if answer_text else 0.2
-                        )
-                    ],
-                    requires_review=False if answer_text else True
-                )
-                answers.append(direct_answer)
-                confidence_accumulator += direct_answer.confidence_score
-                logger.info(
-                    "[fill-application-form] auth answer prepared field_id=%s answer_len=%d confidence=%.2f",
-                    field.field_id,
-                    len(direct_answer.answer or ""),
-                    direct_answer.confidence_score,
-                )
-                continue
-
-            question_text = field.label or field.field_name or field.field_id
-            from app.services.flash.models import QuestionContext
-            context = QuestionContext(
-                question=question_text,
-                field_id=field.field_id,
-                field_type=field.field_type,
-                job_id=request.job_id or "unknown_job",
-                resume_path=user_profile.master_resume_path or "./data/resumes/master_resume.txt",
-                user_profile=user_profile.dict()
-            )
-            logger.info(
-                "[fill-application-form] sending field to QA field_id=%s question=%s",
-                field.field_id,
-                question_text,
-            )
-            answer = await qa_engine.answer_question(context, user_profile)
-            answers.append(answer)
-            confidence_accumulator += answer.confidence_score
-            logger.info(
-                "[fill-application-form] QA answer ready field_id=%s confidence=%.2f requires_review=%s",
-                answer.field_id,
-                answer.confidence_score,
-                answer.requires_review,
-            )
 
         overall_confidence = (
-            confidence_accumulator / len(answers)
-            if answers else 0.0
+            sum(answer.confidence for answer in answers) / len(answers)
+            if answers
+            else 0.0
         )
+        duration_ms = int((time.perf_counter() - started_at) * 1000)
         logger.info(
-            "[fill-application-form] response prepared answers=%d overall_confidence=%.2f warnings=%d",
+            "[fill-application-form] request_id=%s completed answer_count=%d overall_confidence=%.2f duration_ms=%d",
+            request_id,
             len(answers),
             overall_confidence,
-            len(warnings),
+            duration_ms,
         )
-
-        return FillApplicationFormResponse(
-            answers=answers,
-            overall_confidence=overall_confidence,
-            warnings=warnings or None
-        )
+        return FillApplicationFormResponse(answers=answers, overall_confidence=overall_confidence)
 
     except Exception as e:
-        logger.error(f"Form filling failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        duration_ms = int((time.perf_counter() - started_at) * 1000)
+        logger.error(
+            "[fill-application-form] request_id=%s failed=%s duration_ms=%d",
+            request_id,
+            type(e).__name__,
+            duration_ms,
+        )
+        raise HTTPException(status_code=500, detail="Form filling failed")
 
 
 # ===== Approval & Submission Endpoints =====
@@ -1293,3 +1225,4 @@ def _get_auth_password(user_id: str) -> Optional[str]:
         if user_data.get("id") == user_id:
             return user_data.get("latest_login_password")
     return None
+

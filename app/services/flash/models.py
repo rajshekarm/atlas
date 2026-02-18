@@ -2,7 +2,7 @@
 Pydantic models for Flash AI Job Application Assistant
 """
 from typing import Optional, List, Dict, Any, Literal
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, model_validator, ConfigDict
 from datetime import datetime
 from enum import Enum
 
@@ -539,18 +539,48 @@ class FillApplicationRequest(BaseModel):
 
 
 class FillApplicationFormRequest(BaseModel):
-    """Browser request for extracted form fields and optional user profile data."""
-    form_fields: List[FormField]
+    """Browser request for extracted application questions and optional user profile data."""
+    model_config = ConfigDict(extra="forbid")
+
+    class ApplicationQuestion(BaseModel):
+        """Logical question extracted from one or more DOM fields."""
+
+        question_id: str
+        prompt: str
+        required: bool = False
+        question_type: Literal[
+            "single_choice",
+            "multi_choice",
+            "free_text",
+            "date",
+            "file",
+            "boolean",
+        ]
+        options: Optional[List[str]] = None
+        field_ids: List[str]
+
     user_id: str
     job_id: Optional[str] = None
+    questions: List[ApplicationQuestion]
     user_profile: Optional[Dict[str, Any]] = None
 
 
 class FillApplicationFormResponse(BaseModel):
-    """Answer bundle returned to the client"""
-    answers: List[QuestionAnswer]
+    """Answer bundle returned to the client."""
+
+    class FilledQuestionAnswer(BaseModel):
+        """One logical question answer projected to its target field ids."""
+
+        question_id: str
+        field_id: str
+        field_ids: List[str]
+        question: str
+        answer: str
+        confidence: float
+        sources: List[str]
+
+    answers: List[FilledQuestionAnswer]
     overall_confidence: float
-    warnings: Optional[List[str]] = None
 
 
 class ApproveApplicationRequest(BaseModel):

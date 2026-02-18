@@ -306,20 +306,20 @@ analysis = response.json()
 ### Fill Application Form
 ```python
 fill_data = {
-    "form_fields": [
+    "questions": [
         {
-            "field_id": "email",
-            "field_name": "email",
-            "field_type": "email",
-            "label": "Email Address",
-            "required": True
+            "question_id": "q_email",
+            "prompt": "Email Address",
+            "required": True,
+            "question_type": "free_text",
+            "field_ids": ["email"]
         },
         {
-            "field_id": "experience",
-            "field_name": "experience",
-            "field_type": "textarea",
-            "label": "Tell us about your experience",
-            "required": True
+            "question_id": "q_experience",
+            "prompt": "Tell us about your experience",
+            "required": True,
+            "question_type": "free_text",
+            "field_ids": ["experience"]
         }
     ],
     "user_id": user_id,
@@ -333,6 +333,24 @@ fill_data = {
 
 response = httpx.post("http://localhost:8000/api/flash/fill-application-form", json=fill_data)
 answers = response.json()
+```
+
+Example response:
+```json
+{
+  "answers": [
+    {
+      "question_id": "q_email",
+      "field_id": "email",
+      "field_ids": ["email"],
+      "question": "Email Address",
+      "answer": "jane@example.com",
+      "confidence": 0.95,
+      "sources": ["profile"]
+    }
+  ],
+  "overall_confidence": 0.95
+}
 ```
 
 ### Answer Question
