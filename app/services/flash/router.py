@@ -8,6 +8,7 @@ import logging
 from datetime import datetime
 
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import get_current_user_id, get_optional_user_id
@@ -127,6 +128,7 @@ async def register(request: RegisterRequest, db: AsyncSession = Depends(get_db))
             updated_at=now,
         )
         db.add(user)
+        await db.flush()
         
         # Generate tokens
         access_token, access_expires = create_access_token(user_id, request.email)
@@ -159,6 +161,13 @@ async def register(request: RegisterRequest, db: AsyncSession = Depends(get_db))
         
     except HTTPException:
         raise
+    except IntegrityError as e:
+        await db.rollback()
+        logger.error(f"Registration integrity failure: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Registration failed due to database constraint violation"
+        )
     except Exception as e:
         await db.rollback()
         logger.error(f"Registration failed: {e}")
@@ -206,6 +215,7 @@ async def login(request: LoginRequest, db: AsyncSession = Depends(get_db)):
             user_id=user.id,
             expires_at=refresh_expires,
         ))
+        await db.flush()
         await db.commit()
         
         # Create response
@@ -228,6 +238,13 @@ async def login(request: LoginRequest, db: AsyncSession = Depends(get_db)):
         
     except HTTPException:
         raise
+    except IntegrityError as e:
+        await db.rollback()
+        logger.error(f"Login integrity failure: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Login failed due to database constraint violation"
+        )
     except Exception as e:
         await db.rollback()
         logger.error(f"Login failed: {e}")
