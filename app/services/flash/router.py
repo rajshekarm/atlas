@@ -5,6 +5,10 @@ API endpoints for AI Job Application Assistant
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends, status
 from typing import Any, Dict, List, Optional
 import logging
+from datetime import datetime
+
+from sqlalchemy import delete, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import get_current_user_id, get_optional_user_id
 from app.services.auth.models import (
@@ -15,7 +19,6 @@ from app.services.auth.models import (
     AuthData,
     UserResponse,
     RefreshTokenResponse,
-    RefreshToken
 )
 from app.services.auth.utils import (
     hash_password,
@@ -56,6 +59,8 @@ from app.services.flash.services.resume_tailor import ResumeTailorService
 from app.services.flash.services.qa_engine import QuestionAnsweringService
 from app.services.flash.services.guardrails import GuardrailsService
 from app.services.flash.llm_client import get_llm_client
+from app.services.flash.db import get_db, init_db
+from app.services.flash.db_models import FlashRefreshToken, FlashUser, FlashUserProfile
 
 # Initialize LLM client (provider-agnostic)
 llm_client = get_llm_client()
@@ -70,10 +75,9 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-# ===== Authentication Storage =====
-# In-memory storage (replace with database in production)
-auth_users_db: Dict[str, dict] = {}  # email -> user data
-auth_refresh_tokens_db: Dict[str, RefreshToken] = {}  # token -> RefreshToken
+@router.on_event("startup")
+async def startup_flash_db() -> None:
+    await init_db()
 
 
 # ===== Health Check =====
@@ -88,7 +92,7 @@ async def health_check():
 # ========================================
 
 @router.post("/auth/register", response_model=AuthResponse, tags=["Authentication"])
-async def register(request: RegisterRequest):
+async def register(request: RegisterRequest, db: AsyncSession = Depends(get_db)):
     """
     Register a new user
     
@@ -100,8 +104,8 @@ async def register(request: RegisterRequest):
     - Returns user data and tokens
     """
     try:
-        # Check if user already exists
-        if request.email in auth_users_db:
+        existing_user = await db.scalar(select(FlashUser).where(FlashUser.email == request.email))
+        if existing_user:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Email already registered"
@@ -110,36 +114,30 @@ async def register(request: RegisterRequest):
         # Hash password
         hashed_password = hash_password(request.password)
         
-        # Generate user ID
         import uuid
         user_id = f"user_{uuid.uuid4().hex[:10]}"
-        
-        # Create user
-        from datetime import datetime
-        user_data = {
-            "id": user_id,
-            "name": request.name,
-            "email": request.email,
-            "password": hashed_password,
-            # Dev-only convenience for auto-fill flows that require credential replay.
-            # Replace with encrypted credential vault before production.
-            "latest_login_password": request.password,
-            "created_at": datetime.utcnow().isoformat()
-        }
-        
-        # Store user
-        auth_users_db[request.email] = user_data
+        now = datetime.utcnow()
+        user = FlashUser(
+            id=user_id,
+            name=request.name,
+            email=request.email,
+            password_hash=hashed_password,
+            latest_login_password=request.password,
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(user)
         
         # Generate tokens
         access_token, access_expires = create_access_token(user_id, request.email)
         refresh_token, refresh_expires = create_refresh_token(user_id)
         
-        # Store refresh token
-        auth_refresh_tokens_db[refresh_token] = RefreshToken(
+        db.add(FlashRefreshToken(
             token=refresh_token,
             user_id=user_id,
-            expires_at=refresh_expires
-        )
+            expires_at=refresh_expires,
+        ))
+        await db.commit()
         
         # Create response
         user_response = UserResponse(
@@ -162,6 +160,7 @@ async def register(request: RegisterRequest):
     except HTTPException:
         raise
     except Exception as e:
+        await db.rollback()
         logger.error(f"Registration failed: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -170,7 +169,7 @@ async def register(request: RegisterRequest):
 
 
 @router.post("/auth/login", response_model=AuthResponse, tags=["Authentication"])
-async def login(request: LoginRequest):
+async def login(request: LoginRequest, db: AsyncSession = Depends(get_db)):
     """
     Login an existing user
     
@@ -180,45 +179,40 @@ async def login(request: LoginRequest):
     - Returns user data and tokens
     """
     try:
-        # Check if user exists
-        if request.email not in auth_users_db:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid email or password"
-            )
-        
-        user_data = auth_users_db[request.email]
-        
-        # Verify password
-        if not verify_password(request.password, user_data["password"]):
+        user = await db.scalar(select(FlashUser).where(FlashUser.email == request.email))
+        if not user:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid email or password"
             )
 
-        # Keep latest successful plaintext credential in memory for auth-form replay.
-        # Replace with encrypted credential vault before production.
-        user_data["latest_login_password"] = request.password
+        if not verify_password(request.password, user.password_hash):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid email or password"
+            )
+
+        user.latest_login_password = request.password
+        user.updated_at = datetime.utcnow()
         
         # Generate tokens
         access_token, access_expires = create_access_token(
-            user_data["id"], 
+            user.id,
             request.email
         )
-        refresh_token, refresh_expires = create_refresh_token(user_data["id"])
-        
-        # Store refresh token
-        auth_refresh_tokens_db[refresh_token] = RefreshToken(
+        refresh_token, refresh_expires = create_refresh_token(user.id)
+        db.add(FlashRefreshToken(
             token=refresh_token,
-            user_id=user_data["id"],
-            expires_at=refresh_expires
-        )
+            user_id=user.id,
+            expires_at=refresh_expires,
+        ))
+        await db.commit()
         
         # Create response
         user_response = UserResponse(
-            id=user_data["id"],
-            name=user_data["name"],
-            email=user_data["email"]
+            id=user.id,
+            name=user.name,
+            email=user.email
         )
         
         auth_data = AuthData(
@@ -235,6 +229,7 @@ async def login(request: LoginRequest):
     except HTTPException:
         raise
     except Exception as e:
+        await db.rollback()
         logger.error(f"Login failed: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -243,7 +238,7 @@ async def login(request: LoginRequest):
 
 
 @router.post("/auth/refresh", response_model=RefreshTokenResponse, tags=["Authentication"])
-async def refresh(request: RefreshTokenRequest):
+async def refresh(request: RefreshTokenRequest, db: AsyncSession = Depends(get_db)):
     """
     Refresh access token using refresh token
     
@@ -253,46 +248,33 @@ async def refresh(request: RefreshTokenRequest):
     - Returns new access token and expiration
     """
     try:
-        from datetime import datetime
-        
-        # Check if refresh token exists
-        if request.refresh_token not in auth_refresh_tokens_db:
+        refresh_token_data = await db.scalar(
+            select(FlashRefreshToken).where(FlashRefreshToken.token == request.refresh_token)
+        )
+        if not refresh_token_data:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid refresh token"
             )
-        
-        refresh_token_data = auth_refresh_tokens_db[request.refresh_token]
-        
-        # Check if refresh token is expired
+
         if datetime.utcnow() > refresh_token_data.expires_at:
-            # Clean up expired token
-            del auth_refresh_tokens_db[request.refresh_token]
+            await db.delete(refresh_token_data)
+            await db.commit()
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Refresh token expired"
             )
-        
-        # Get user data
-        user_id = refresh_token_data.user_id
-        user_email = None
-        
-        # Find user email
-        for email, user_data in auth_users_db.items():
-            if user_data["id"] == user_id:
-                user_email = email
-                break
-        
-        if not user_email:
+
+        user = await db.scalar(select(FlashUser).where(FlashUser.id == refresh_token_data.user_id))
+        if not user:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="User not found"
             )
-        
-        # Generate new access token
-        access_token, access_expires = create_access_token(user_id, user_email)
-        
-        logger.info(f"Token refreshed for user: {user_id}")
+
+        access_token, access_expires = create_access_token(user.id, user.email)
+
+        logger.info(f"Token refreshed for user: {user.id}")
         
         return RefreshTokenResponse(
             access_token=access_token,
@@ -302,6 +284,7 @@ async def refresh(request: RefreshTokenRequest):
     except HTTPException:
         raise
     except Exception as e:
+        await db.rollback()
         logger.error(f"Token refresh failed: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -310,7 +293,7 @@ async def refresh(request: RefreshTokenRequest):
 
 
 @router.post("/auth/logout", tags=["Authentication"])
-async def logout(request: RefreshTokenRequest):
+async def logout(request: RefreshTokenRequest, db: AsyncSession = Depends(get_db)):
     """
     Logout user by invalidating refresh token
     
@@ -319,14 +302,14 @@ async def logout(request: RefreshTokenRequest):
     - Returns success message
     """
     try:
-        # Remove refresh token if it exists
-        if request.refresh_token in auth_refresh_tokens_db:
-            del auth_refresh_tokens_db[request.refresh_token]
-            logger.info(f"User logged out")
+        await db.execute(delete(FlashRefreshToken).where(FlashRefreshToken.token == request.refresh_token))
+        await db.commit()
+        logger.info("User logged out")
         
         return {"success": True, "message": "Logged out successfully"}
         
     except Exception as e:
+        await db.rollback()
         logger.error(f"Logout failed: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -335,7 +318,10 @@ async def logout(request: RefreshTokenRequest):
 
 
 @router.get("/auth/me", response_model=UserResponse, tags=["Authentication"])
-async def get_current_user_info(user_id: str = Depends(get_current_user_id)):
+async def get_current_user_info(
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
     """
     Get current user information from access token
     
@@ -343,18 +329,17 @@ async def get_current_user_info(user_id: str = Depends(get_current_user_id)):
     Returns: User information
     """
     try:
-        # Find user in database
-        for email, user_data in auth_users_db.items():
-            if user_data["id"] == user_id:
-                return UserResponse(
-                    id=user_data["id"],
-                    name=user_data["name"],
-                    email=user_data["email"]
-                )
-        
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found"
+        user = await db.scalar(select(FlashUser).where(FlashUser.id == user_id))
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found"
+            )
+
+        return UserResponse(
+            id=user.id,
+            name=user.name,
+            email=user.email,
         )
         
     except HTTPException:
@@ -481,7 +466,10 @@ async def tailor_resume(request: TailorResumeRequest):
 
 # ===== Question Answering Endpoints =====
 @router.post("/answer-question", response_model=QuestionAnswer)
-async def answer_question(request: AnswerQuestionRequest):
+async def answer_question(
+    request: AnswerQuestionRequest,
+    db: AsyncSession = Depends(get_db),
+):
     """
     Answer a single application question using RAG
     
@@ -493,7 +481,7 @@ async def answer_question(request: AnswerQuestionRequest):
     """
     try:
         # Fetch user profile
-        user_profile = _build_user_profile(request.user_id)
+        user_profile = await _build_user_profile(db, request.user_id)
         
         # Answer question
         answer = await qa_engine.answer_question(
@@ -519,7 +507,10 @@ async def answer_question(request: AnswerQuestionRequest):
 
 # ===== Application Filling Endpoints =====
 @router.post("/fill-application", response_model=ApplicationReview)
-async def fill_application(request: FillApplicationRequest):
+async def fill_application(
+    request: FillApplicationRequest,
+    db: AsyncSession = Depends(get_db),
+):
     """
     Fill entire application form
     
@@ -531,7 +522,7 @@ async def fill_application(request: FillApplicationRequest):
     """
     try:
         # Fetch user profile
-        user_profile = _build_user_profile(request.user_id)
+        user_profile = await _build_user_profile(db, request.user_id)
         
         # Analyze job first
         job_analysis = await job_analyzer.analyze_job(request.job_description)
@@ -596,7 +587,10 @@ async def fill_application(request: FillApplicationRequest):
 
 # ===== Field-Level Form Filling =====
 @router.post("/fill-application-form", response_model=FillApplicationFormResponse)
-async def fill_application_form(request: FillApplicationFormRequest):
+async def fill_application_form(
+    request: FillApplicationFormRequest,
+    db: AsyncSession = Depends(get_db),
+):
     """Fill application answers using extracted logical questions."""
     import time
     import uuid
@@ -637,8 +631,8 @@ async def fill_application_form(request: FillApplicationFormRequest):
             profile_overrides["password"] = profile_overrides["passoword"]
         profile_overrides.pop("id", None)
 
-        user_profile = _build_user_profile(request.user_id, overrides=profile_overrides or None)
-        auth_password = _get_auth_password(request.user_id) or ""
+        user_profile = await _build_user_profile(db, request.user_id, overrides=profile_overrides or None)
+        auth_password = await _get_auth_password(db, request.user_id) or ""
         answers: List[FillApplicationFormResponse.FilledQuestionAnswer] = []
 
         def _norm(*values: Optional[str]) -> str:
@@ -827,11 +821,14 @@ async def fill_application_form(request: FillApplicationFormRequest):
                 sources: List[str] = []
 
                 profile_answer = _infer_profile_answer(normalized_prompt, question_key)
+
+                #	1. deterministic profile mapping first
                 if profile_answer is not None:
                     answer_text = profile_answer
                     confidence = 0.95 if answer_text else (0.15 if not question.required else 0.05)
                     sources = ["profile"]
                 else:
+                    #2. RAG/LLM fallback only when mapping fails
                     context = QuestionContext(
                         question=question_text,
                         field_id=field_id,
@@ -969,14 +966,11 @@ async def approve_application(
 
 # ===== User Profile Endpoints =====
 
-# In-memory storage (replace with database in production)
-user_profiles_db: Dict[str, UserProfile] = {}
-
-
 @router.post("/user-profile", response_model=UserProfile)
 async def create_user_profile(
     request: CreateUserProfileRequest,
-    authenticated_user_id: str = Depends(get_current_user_id)
+    authenticated_user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Create a new user profile (Protected - requires authentication)
@@ -990,53 +984,55 @@ async def create_user_profile(
     Requires: Authorization header with valid JWT token
     """
     try:
-        from datetime import datetime
-        
-        # Use authenticated user ID from token
         user_id = authenticated_user_id
-        
-        # Create user profile using field names (not alias)
+
+        user = await db.scalar(select(FlashUser).where(FlashUser.id == user_id))
+        if not user:
+            raise HTTPException(status_code=404, detail="Authenticated user not found")
+
+        create_data = request.model_dump(exclude_unset=True, by_alias=False)
+        profile_data = {
+            **create_data,
+            "full_name": create_data.get("full_name") or user.name,
+            "email": user.email,
+            "master_resume_path": create_data.get("master_resume_path") or f"./data/resumes/{user_id}_master_resume.txt",
+        }
+        now = datetime.utcnow()
+
+        existing_profile = await db.scalar(select(FlashUserProfile).where(FlashUserProfile.user_id == user_id))
+        if existing_profile:
+            existing_profile.profile_data = profile_data
+            existing_profile.updated_at = now
+            created_at = existing_profile.created_at
+            updated_at = existing_profile.updated_at
+        else:
+            db.add(
+                FlashUserProfile(
+                    user_id=user_id,
+                    profile_data=profile_data,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            created_at = now
+            updated_at = now
+
+        await db.commit()
+
         profile = UserProfile(
             user_id=user_id,
-            name=request.full_name,  # Use alias 'name' for construction
-            email=request.email,
-            password=request.password,  # TODO: Hash in production
-            phone=request.phone,
-            location=request.location,
-            linkedin_url=request.linkedin_url,
-            github_url=request.github_url,
-            portfolio_url=request.portfolio_url,
-            current_title=request.current_title,
-            years_of_experience=request.years_of_experience,
-            skills=request.skills or [],
-            education=request.education or [],
-            experience=request.experience or [],
-            preferred_roles=request.preferred_roles or [],
-            work_authorization=request.work_authorization,
-            visa_status=request.visa_status,
-            notice_period=request.notice_period,
-            salary_expectation=request.salary_expectation,
-            master_resume_path=f"./data/resumes/{user_id}_master_resume.txt",
-            created_at=datetime.now(),
-            updated_at=datetime.now()
+            created_at=created_at,
+            updated_at=updated_at,
+            **profile_data,
         )
-
-        # Apply all explicitly provided optional fields so profile expansion
-        # does not require manual mapping changes in this endpoint.
-        create_data = request.model_dump(exclude_unset=True, by_alias=False)
-        for field, value in create_data.items():
-            if field == "full_name":
-                profile.full_name = value
-            elif hasattr(profile, field):
-                setattr(profile, field, value)
-        
-        # Store in database (currently in-memory)
-        user_profiles_db[user_id] = profile
         
         logger.info(f"Created user profile for {user_id}")
         return profile
         
+    except HTTPException:
+        raise
     except Exception as e:
+        await db.rollback()
         logger.error(f"Profile creation failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1044,7 +1040,8 @@ async def create_user_profile(
 @router.get("/user-profile/{user_id}", response_model=UserProfile)
 async def get_user_profile(
     user_id: str,
-    authenticated_user_id: str = Depends(get_current_user_id)
+    authenticated_user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Get user profile by ID (Protected - requires authentication)
@@ -1062,14 +1059,11 @@ async def get_user_profile(
                 detail="You can only access your own profile"
             )
         
-        # Check if profile exists in storage
-        if user_id in user_profiles_db:
-            return user_profiles_db[user_id]
+        profile = await _build_user_profile(db, user_id)
+        return profile
         
-        # Fallback to placeholder for backward compatibility
-        logger.warning(f"Profile not found for {user_id}, returning placeholder")
-        return _build_user_profile(user_id)
-        
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Profile retrieval failed: {e}")
         raise HTTPException(status_code=404, detail=f"User profile not found: {user_id}")
@@ -1079,7 +1073,8 @@ async def get_user_profile(
 async def update_user_profile(
     user_id: str,
     request: UpdateUserProfileRequest,
-    authenticated_user_id: str = Depends(get_current_user_id)
+    authenticated_user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Update existing user profile (Protected - requires authentication)
@@ -1093,31 +1088,33 @@ async def update_user_profile(
     Requires: Authorization header with valid JWT token
     """
     try:
-        from datetime import datetime
-        
-        # Verify user is updating their own profile
         if user_id != authenticated_user_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You can only update your own profile"
             )
-        
-        # Upsert behavior: if profile is missing (common with in-memory storage),
-        # start from fallback profile and persist it after applying updates.
-        profile = user_profiles_db.get(user_id) or _build_user_profile(user_id)
-        
-        # Update only provided fields (use model_dump for Pydantic v2)
+
+        profile = await _build_user_profile(db, user_id)
         update_data = request.model_dump(exclude_unset=True, by_alias=False)
-        
         for field, value in update_data.items():
             if value is not None:
                 setattr(profile, field, value)
-        
-        # Update timestamp
-        profile.updated_at = datetime.now()
-        
-        # Store updated profile
-        user_profiles_db[user_id] = profile
+
+        profile.updated_at = datetime.utcnow()
+
+        profile_row = await db.scalar(select(FlashUserProfile).where(FlashUserProfile.user_id == user_id))
+        if not profile_row:
+            profile_row = FlashUserProfile(
+                user_id=user_id,
+                profile_data={},
+                created_at=profile.created_at,
+                updated_at=profile.updated_at,
+            )
+            db.add(profile_row)
+        profile_row.profile_data = _serialize_profile(profile)
+        profile_row.updated_at = profile.updated_at
+
+        await db.commit()
         
         logger.info(f"Updated user profile for {user_id}")
         return profile
@@ -1125,6 +1122,7 @@ async def update_user_profile(
     except HTTPException:
         raise
     except Exception as e:
+        await db.rollback()
         logger.error(f"Profile update failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1132,7 +1130,8 @@ async def update_user_profile(
 @router.delete("/user-profile/{user_id}")
 async def delete_user_profile(
     user_id: str,
-    authenticated_user_id: str = Depends(get_current_user_id)
+    authenticated_user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Delete user profile (Protected - requires authentication)
@@ -1150,10 +1149,12 @@ async def delete_user_profile(
                 detail="You can only delete your own profile"
             )
         
-        if user_id not in user_profiles_db:
+        profile_row = await db.scalar(select(FlashUserProfile).where(FlashUserProfile.user_id == user_id))
+        if not profile_row:
             raise HTTPException(status_code=404, detail=f"User profile not found: {user_id}")
-        
-        del user_profiles_db[user_id]
+
+        await db.delete(profile_row)
+        await db.commit()
         
         logger.info(f"Deleted user profile for {user_id}")
         return {"message": "Profile deleted successfully", "user_id": user_id}
@@ -1161,18 +1162,40 @@ async def delete_user_profile(
     except HTTPException:
         raise
     except Exception as e:
+        await db.rollback()
         logger.error(f"Profile deletion failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/user-profiles", response_model=List[UserProfile])
-async def list_user_profiles():
+async def list_user_profiles(db: AsyncSession = Depends(get_db)):
     """
     List all user profiles
     
     Returns all stored user profiles (for admin/debugging)
     """
-    return list(user_profiles_db.values())
+    rows = (await db.execute(select(FlashUserProfile))).scalars().all()
+    users = {}
+    user_ids = [row.user_id for row in rows]
+    if user_ids:
+        user_rows = (await db.execute(select(FlashUser).where(FlashUser.id.in_(user_ids)))).scalars().all()
+        users = {user.id: user for user in user_rows}
+
+    profiles: List[UserProfile] = []
+    for row in rows:
+        user = users.get(row.user_id)
+        payload = dict(row.profile_data or {})
+        payload.setdefault("full_name", user.name if user else "John Doe")
+        payload.setdefault("email", user.email if user else "john@example.com")
+        profiles.append(
+            UserProfile(
+                user_id=row.user_id,
+                created_at=row.created_at,
+                updated_at=row.updated_at,
+                **payload,
+            )
+        )
+    return profiles
 
 
 # ===== Analytics Endpoints =====
@@ -1184,32 +1207,49 @@ async def get_applications(user_id: str):
 
 
 # ===== Helper Functions =====
-def _build_user_profile(user_id: str, overrides: Optional[Dict[str, Any]] = None) -> UserProfile:
-    """Return a lightweight profile used by the Flash service in the absence of storage."""
-    # Check if profile exists in storage first
-    if user_id in user_profiles_db:
-        print(f"user profile for userid : {user_id}")
-        profile = user_profiles_db[user_id]
-        if overrides:
-            profile = profile.copy(update=overrides)
-        return profile
-    
-    # Fallback to placeholder profile
-    profile = UserProfile(
-        user_id=user_id,
-        name="John Doe",  # Use alias 'name'
-        email="john@example.com",
-        phone="+1-555-0123",
-        location="San Francisco, CA",
-        current_title="Software Engineer",
-        years_of_experience=5,
-        skills=["Python", "FastAPI", "React"],
-        preferred_roles=["Backend Engineer"],
-        work_authorization="US Citizen",
-        master_resume_path="./data/resumes/master_resume.txt"
+def _serialize_profile(profile: UserProfile) -> Dict[str, Any]:
+    return profile.model_dump(
+        by_alias=False,
+        exclude={"user_id", "created_at", "updated_at"},
     )
+
+
+async def _build_user_profile(
+    db: AsyncSession,
+    user_id: str,
+    overrides: Optional[Dict[str, Any]] = None,
+) -> UserProfile:
+    """Return persisted profile when available, otherwise fallback placeholder profile."""
+    user = await db.scalar(select(FlashUser).where(FlashUser.id == user_id))
+    profile_row = await db.scalar(select(FlashUserProfile).where(FlashUserProfile.user_id == user_id))
+
+    if profile_row:
+        payload = dict(profile_row.profile_data or {})
+        payload.setdefault("full_name", user.name if user else "John Doe")
+        payload.setdefault("email", user.email if user else "john@example.com")
+        profile = UserProfile(
+            user_id=user_id,
+            created_at=profile_row.created_at,
+            updated_at=profile_row.updated_at,
+            **payload,
+        )
+    else:
+        profile = UserProfile(
+            user_id=user_id,
+            name=user.name if user else "John Doe",
+            email=user.email if user else "john@example.com",
+            phone="+1-555-0123",
+            location="San Francisco, CA",
+            current_title="Software Engineer",
+            years_of_experience=5,
+            skills=["Python", "FastAPI", "React"],
+            preferred_roles=["Backend Engineer"],
+            work_authorization="US Citizen",
+            master_resume_path="./data/resumes/master_resume.txt",
+        )
+
     if overrides:
-        profile = profile.copy(update=overrides)
+        profile = profile.model_copy(update=overrides)
     return profile
 
 async def log_application(application_id: str, user_id: str):
@@ -1219,10 +1259,8 @@ async def log_application(application_id: str, user_id: str):
     # Update knowledge base with approved answers
 
 
-def _get_auth_password(user_id: str) -> Optional[str]:
-    """Get latest known plaintext password for a user from in-memory auth store."""
-    for user_data in auth_users_db.values():
-        if user_data.get("id") == user_id:
-            return user_data.get("latest_login_password")
-    return None
+async def _get_auth_password(db: AsyncSession, user_id: str) -> Optional[str]:
+    """Get latest known plaintext password for a user from persisted auth store."""
+    user = await db.scalar(select(FlashUser).where(FlashUser.id == user_id))
+    return user.latest_login_password if user else None
 

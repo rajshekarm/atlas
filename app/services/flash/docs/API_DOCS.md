@@ -244,6 +244,9 @@ Fills an entire application form with AI-generated answers.
 }
 ```
 
+**Flow Diagram (Mermaid):**
+- `app/services/flash/docs/fill_application_form_flow.mmd`
+
 ---
 
 ### 6. Approve & Submit Application

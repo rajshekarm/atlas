@@ -1,0 +1,44 @@
+sequenceDiagram
+    autonumber
+    actor Client
+    participant Router as flash.router.fill_application_form
+    participant Profile as _build_user_profile(db, user_id, overrides)
+    participant AuthPwd as _get_auth_password(db, user_id)
+    participant QA as qa_engine.answer_question
+    participant Ctx as QA._retrieve_context
+    participant LLM as QA._generate_answer/_call_llm
+    participant Norm as _normalize_answer_for_type
+
+    Client->>Router: POST /api/flash/fill-application-form
+    Router->>Router: create request_id + log question types
+    Router->>Router: normalize request.user_profile key aliases
+    Router->>Profile: load persisted profile (+ apply overrides)
+    Profile-->>Router: UserProfile
+    Router->>AuthPwd: fetch latest_login_password
+    AuthPwd-->>Router: password or None
+
+    loop For each ApplicationQuestion
+        Router->>Router: _target_field_ids + normalized question text/key
+        Router->>Router: _infer_profile_answer(...)
+
+        alt Profile/direct answer exists
+            Router->>Norm: normalize by question_type
+            Norm-->>Router: answer, confidence, sources
+        else No direct answer
+            Router->>QA: answer_question(context, user_profile)
+            QA->>Ctx: retrieve profile/resume/past-answer context
+            Ctx-->>QA: AnswerSource[]
+            QA->>LLM: generate answer from context
+            LLM-->>QA: answer + confidence score
+            QA-->>Router: QuestionAnswer
+            Router->>Norm: normalize by question_type
+            Norm-->>Router: answer, confidence, sources
+        end
+
+        alt Per-question exception
+            Router->>Router: add fallback empty answer\n(low confidence + failure source)
+        end
+    end
+
+    Router->>Router: compute overall_confidence (avg of answers)
+    Router-->>Client: FillApplicationFormResponse { answers, overall_confidence }

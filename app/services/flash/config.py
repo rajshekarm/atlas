@@ -3,10 +3,17 @@ Configuration management for Flash service
 """
 from pydantic_settings import BaseSettings
 from typing import Optional
+from urllib.parse import quote_plus
 
 
 class FlashSettings(BaseSettings):
     """Flash service configuration"""
+    database_url: Optional[str] = None
+    database_host: str = "localhost"
+    database_port: int = 5432
+    database_name: str = "atlasdb"
+    database_user: str = "auth_user"
+    database_password: str = "Auth_password1"
     
     # LLM Provider Selection
     enable_llm: bool = True
@@ -57,6 +64,21 @@ class FlashSettings(BaseSettings):
     class Config:
         env_file = ".env"
         env_prefix = "FLASH_"
+
+    def get_database_url(self) -> str:
+        """
+        Return database URL from FLASH_DATABASE_URL when set,
+        otherwise build it from component database env vars.
+        """
+        if self.database_url:
+            return self.database_url
+
+        user = quote_plus(self.database_user)
+        password = quote_plus(self.database_password)
+        return (
+            f"postgresql+asyncpg://{user}:{password}"
+            f"@{self.database_host}:{self.database_port}/{self.database_name}"
+        )
 
 
 # Global settings instance
